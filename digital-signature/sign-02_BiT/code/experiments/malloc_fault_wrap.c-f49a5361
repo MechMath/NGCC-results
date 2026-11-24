@@ -1,0 +1,40 @@
+#include <stddef.h>
+
+void *__real_malloc(size_t);
+
+static int armed;
+static unsigned long long count;
+static unsigned long long seen_size;
+static size_t threshold;
+
+void fault_arm_once_ge(size_t n)
+{
+    threshold = n;
+    armed = 1;
+}
+
+void fault_disarm(void)
+{
+    armed = 0;
+}
+
+unsigned long long fault_count(void)
+{
+    return count;
+}
+
+unsigned long long fault_seen_size(void)
+{
+    return seen_size;
+}
+
+void *__wrap_malloc(size_t n)
+{
+    if (armed && n >= threshold) {
+        armed = 0;
+        count++;
+        seen_size = (unsigned long long)n;
+        return NULL;
+    }
+    return __real_malloc(n);
+}

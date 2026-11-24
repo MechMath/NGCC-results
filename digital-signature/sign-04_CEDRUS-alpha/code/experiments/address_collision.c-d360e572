@@ -1,0 +1,69 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "address.h"
+#include "hash.h"
+#include "params.h"
+
+static void address_for_chain(unsigned char encoded[SPX_ADDR_BYTES],
+                              uint32_t chain)
+{
+    uint32_t address[8] = {0};
+
+    set_layer_addr(address, 0);
+    set_tree_addr(address, 0x0102030405060708ULL);
+    set_type(address, SPX_ADDR_TYPE_FORSCHAIN);
+    set_keypair_addr(address, 0x11223344);
+    set_tree_height(address, 0);
+    set_chain_addr(address, chain);
+    set_hash_addr(address, 0);
+    memcpy(encoded, address, SPX_ADDR_BYTES);
+}
+
+int main(int argc, char **argv)
+{
+    static const uint32_t probes[] = {
+        0, 1, 7, 127, 255, 256, 1023, 3583
+    };
+    unsigned char key[SPX_N] = {0};
+    const char *backend = argc == 2 ? argv[1] : "UNLABELED";
+
+    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+        unsigned char address_x[SPX_ADDR_BYTES];
+        unsigned char address_x_plus_1[SPX_ADDR_BYTES];
+        unsigned char address_x_plus_256[SPX_ADDR_BYTES];
+        unsigned char prf_x[SPX_N];
+        unsigned char prf_x_plus_1[SPX_N];
+        unsigned char prf_x_plus_256[SPX_N];
+        uint32_t x = probes[i];
+        int address_collision;
+        int prf_collision;
+        int adjacent_prf_collision;
+
+        address_for_chain(address_x, x);
+        address_for_chain(address_x_plus_1, x + 1);
+        address_for_chain(address_x_plus_256, x + 256);
+        prf_addr(prf_x, key, (const uint32_t *)address_x);
+        prf_addr(prf_x_plus_1, key, (const uint32_t *)address_x_plus_1);
+        prf_addr(prf_x_plus_256, key, (const uint32_t *)address_x_plus_256);
+
+        address_collision =
+            memcmp(address_x, address_x_plus_256, SPX_ADDR_BYTES) == 0;
+        prf_collision =
+            memcmp(prf_x, prf_x_plus_256, SPX_N) == 0;
+        adjacent_prf_collision =
+            memcmp(prf_x, prf_x_plus_1, SPX_N) == 0;
+
+        printf("backend=%s x=%u address_x_eq_x_plus_256=%d "
+               "prf_x_eq_x_plus_256=%d prf_x_eq_x_plus_1=%d "
+               "address_word_24_31=",
+               backend, x, address_collision, prf_collision,
+               adjacent_prf_collision);
+        for (size_t j = 24; j < SPX_ADDR_BYTES; j++) {
+            printf("%02X", address_x[j]);
+        }
+        printf("\n");
+    }
+    return 0;
+}

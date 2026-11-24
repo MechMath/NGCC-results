@@ -1,0 +1,1 @@
+Package size exceeded the configured limit of 50 MB. Try https://github.com/ngcc-dev/ngcc-harness/tree/dc66c6cb3c06e75bdea0048e21fa4e13c63f00af/kex-09/TriQ-KEX/Implementations/Reference_Implementation/TriQ-KEX-384/src/common/triq-384/parameters.h instead.

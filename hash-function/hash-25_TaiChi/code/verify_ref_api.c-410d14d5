@@ -1,0 +1,80 @@
+#define _GNU_SOURCE
+
+#include <errno.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
+#include <unistd.h>
+
+int CryptHash(int digest_len_bits,
+              const unsigned char *msg,
+              unsigned long long msg_len_bits,
+              unsigned char *digest);
+
+#ifndef TAICHI_BITS
+#error "Define TAICHI_BITS as 512, 768, or 1024"
+#endif
+
+static size_t proc_vmsize_bytes(void) {
+    FILE *f = fopen("/proc/self/statm", "r");
+    unsigned long pages = 0;
+    if (f == NULL || fscanf(f, "%lu", &pages) != 1) {
+        if (f != NULL) {
+            fclose(f);
+        }
+        return 0;
+    }
+    fclose(f);
+    return (size_t)pages * (size_t)sysconf(_SC_PAGESIZE);
+}
+
+int main(void) {
+    const size_t msg_bytes = (size_t)1 << 27;
+    const size_t digest_bytes = (size_t)TAICHI_BITS / 8;
+    unsigned char *msg = mmap(NULL, msg_bytes, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (msg == MAP_FAILED) {
+        perror("mmap");
+        return 2;
+    }
+    msg[0] = 0;
+    msg[msg_bytes - 1] = 0;
+
+    unsigned char digest[128];
+    unsigned char sentinel[128];
+    memset(digest, 0xa5, sizeof(digest));
+    memcpy(sentinel, digest, sizeof(digest));
+
+    size_t vm_size = proc_vmsize_bytes();
+    if (vm_size == 0) {
+        fprintf(stderr, "could not read VmSize\n");
+        return 2;
+    }
+    struct rlimit limit;
+    limit.rlim_cur = (rlim_t)(vm_size + ((size_t)16 << 20));
+    limit.rlim_max = limit.rlim_cur;
+    if (setrlimit(RLIMIT_AS, &limit) != 0) {
+        perror("setrlimit");
+        return 2;
+    }
+
+    errno = 0;
+    void *probe = malloc(msg_bytes);
+    int probe_is_null = probe == NULL;
+    if (probe != NULL) {
+        free(probe);
+    }
+
+    int rc = CryptHash(TAICHI_BITS, msg, (unsigned long long)msg_bytes * 8,
+                       digest);
+    int digest_unchanged =
+        memcmp(digest, sentinel, digest_bytes) == 0;
+
+    printf("bits=%d rc=%d message_valid=1 probe_malloc_null=%d "
+           "digest_unchanged=%d\n",
+           TAICHI_BITS, rc, probe_is_null, digest_unchanged);
+    return (probe_is_null && rc == 0 && digest_unchanged) ? 0 : 1;
+}

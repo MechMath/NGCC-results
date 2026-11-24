@@ -1,0 +1,116 @@
+candidate_id,candidate_name,severity,status,layer,result,path
+sign-01,Aigis-Sig+,High,Confirmed,Implementation,一次查询的签名字节可塑性违反所声明 SUF-CMA；未据此声称 EUF-CMA 失效。,digital-signature/sign-01_Aigis-Sig+
+sign-02,BiT,Info,Confirmed,Implementation,接受不同签名字节但解码为同一元组；原报告未闭合 SUF 或字节身份安全主张。,digital-signature/sign-02_BiT
+sign-03,CEDRUS+C,Critical,Confirmed,Implementation,CEDRUS+C-256f 有新消息伪造被原验证器接受的有限见证。,digital-signature/sign-03_CEDRUS+C
+sign-04,CEDRUS-alpha,Low,Confirmed,Implementation,160f 有限互操作失败见证。,digital-signature/sign-04_CEDRUS-alpha
+sign-05,Chinith,Critical,Confirmed,Implementation,受支持 SM4th-EM 路径存在仅凭公钥的新消息伪造。,digital-signature/sign-05_Chinith
+sign-06,COMPASS-SIG,Low,Probable,Implementation,COMPASS-SIG 的 Split/采样差异有互操作失败证据。,digital-signature/sign-06_COMPASS-SIG
+sign-07,CS,Critical,Confirmed,Implementation,64 位长度截为 32 位；空消息签名可转用于未查询的 2^32 字节消息。,digital-signature/sign-07_CS
+sign-08,DARTS,High,Confirmed,Implementation,同一消息的签名字节可塑性违反已声明的 SUF-CMA。,digital-signature/sign-08_DARTS
+sign-09,DOVE,Low,Confirmed,Implementation,正常签名从精确 24 字节密钥缓冲区外读取 2992 字节，guard/ASan 终止。,digital-signature/sign-09_DOVE
+sign-10,Facto-DSA,Low,Confirmed,Implementation,hash-to-field 标签不同导致双向互操作失败。,digital-signature/sign-10_Facto-DSA
+sign-11,FlexTree,Low,Confirmed,Implementation,HPORS 输入与规范不一致，导致跨验证失败。,digital-signature/sign-11_FlexTree
+sign-12,Galas,Critical,Confirmed,Implementation,普通 API 在可选 KAT 钩子未设定时固定零种子生成密钥，可公开再生并伪造。,digital-signature/sign-12_Galas
+sign-13,GreatWall Signature Algorithm,Low,Confirmed,Implementation,128s 拒绝特定等长签名时每次泄漏 720880 字节；源码及 LeakSanitizer 有控制证据。,digital-signature/sign-13_GreatWall-Signature-Algorithm
+sign-14,Lynxer,Low,Confirmed,Implementation,160f 存在有限互操作失败。,digital-signature/sign-14_Lynxer
+sign-15,MORNING-ATLAS,High,Confirmed,Implementation,忽略 33 个挑战位，形成已声明 SUF-CMA 的同消息签名可塑性。,digital-signature/sign-15_MORNING-ATLAS
+sign-16,Octarine,Low,Confirmed,Implementation,XOF 长度域不一致使 128/256 跨验证失败，512 控制通过。,digital-signature/sign-16_Octarine
+sign-17,OPS Digital Signature Algorithm,Low,Confirmed,Implementation,合法消息在分配失败时错误返回成功及零长度，另有互操作缺陷。,digital-signature/sign-17_OPS-Digital-Signature-Algorithm
+sign-18,Origami,Critical,Probable,Design,Origami-256 记录了零签名查询的公钥伪造及正负控制。,digital-signature/sign-18_Origami
+sign-19,Phoenix,Low,Confirmed,Implementation,SM3-384f reference/AVX2 互操作不一致，并从 32 字节摘要读取 48 字节。,digital-signature/sign-19_Phoenix
+sign-20,Qing Luan,Info,Confirmed,Implementation,初始化后 fork 克隆 DRNG 可导致可重复签名并恢复信息。,digital-signature/sign-20_Qing-Luan
+sign-21,ReSolveD-α,Low,Confirmed,Implementation,Keccak-320 规范与提交 SHAKE256 实现产生有限互操作差异。,digital-signature/sign-21_ReSolveD
+sign-22,Rhyme,Critical,Confirmed,Implementation,Rhyme-SM3 缓冲溢出后消息摘要固定为零，一次长消息签名可用于不同未查询消息。,digital-signature/sign-22_Rhyme
+sign-23,Shuttle,Critical,Confirmed,Implementation,原 keypair API 固定零种子，可再生密钥并构造被接受的新消息签名。,digital-signature/sign-23_Shuttle
+sign-24,Sigurd,Medium,Confirmed,Design,Sigurd 的 VC 接口不满足其声明的关系，跨支持配置存在组件正确性/证明前提缺陷。,digital-signature/sign-24_Sigurd
+sign-25,SQIsign2D2,High,Proof gap,Design,SQIsign2D2 Level1-eff 自报 64 位量子安全，低于 128 位经典档的 80 位量子要求。,digital-signature/sign-25_SQIsign2D2
+sign-26,SQIsign2D-push1/2,High,Proof gap,Design,SQIsignHD Level-3 的候选特定挑战项在零查询已大于 2^-256，2^80 查询时缺口扩大。,digital-signature/sign-26_SQIsign2D-push1-2
+sign-27,SQIsignTriangle,Low,Confirmed,Implementation,畸形签名触发原实现断言终止。,digital-signature/sign-27_SQIsignTriangle
+sign-28,SYDO,Low,Confirmed,Design,SYDO 六个主要配置给挑战解码器的前缀少 2 位，规范 Sign/Verify 不能完整求值。,digital-signature/sign-28_SYDO
+sign-29,Tins,Low,Confirmed,Design,Tins 的 Sign/Verify Hash2 transcript 不一致，使诚实执行拒绝。,digital-signature/sign-29_Tins
+sign-30,TRINE,Low,Confirmed,Design,TRINE 原规范的正确性/API 接口不一致。,digital-signature/sign-30_TRINE
+sign-31,TSUOV,Low,Confirmed,Design,TSUOV 验证矩阵不为矩形，签名 PRG 索引也不一致，所列参数均不构成良定义的算法对。,digital-signature/sign-31_TSUOV
+sign-33,VDOO,Critical,Confirmed,Implementation,VDOO-128 原公开 API 在新进程未初始化 DRNG，记录了完整密钥再生及零查询新消息伪造。,digital-signature/sign-33_VDOO
+sign-34,YuanYang.DSA,Critical,Lead,Implementation,YuanYang.DSA-512 未播种导出 API 有重复密钥和伪造见证。,digital-signature/sign-34_YuanYang.DSA
+kem-01,Aigis-Enc+,Critical,Confirmed,Implementation,Aigis-Enc+ 失败的重加密比较未改变调用者的密钥输出，600/600 所测修改返回挑战密钥。,key-encapsulation/kem-01_Aigis-Enc+
+kem-02,Amoeba,Low,Confirmed,Implementation,Amoeba-576 比较器漏字节、接受非规范密文，已执行发送方/接收方密钥不一致。,key-encapsulation/kem-02_Amoeba
+kem-03,BAG-Loong,Critical,Confirmed,Implementation,BAG-Loong 固定支持采样使公钥线性方程恢复完整秘密，并在四组官方 KAT 上派生共享密钥。,key-encapsulation/kem-03_BAG-Loong
+kem-04,BAG-Piglet,Low,Confirmed,Implementation,BAG-Piglet 原 KDF 接线与规范不同，短密文长度被忽略导致越界读。,key-encapsulation/kem-04_BAG-Piglet
+kem-05,BIKE-MLThre,Info,Confirmed,Evaluation,BIKE-MLThre 的移位未定义行为仅在强制 UBSan trap 构建中终止。,key-encapsulation/kem-05_BIKE-MLThre
+kem-06,BRA,Low,Confirmed,Implementation,BRA-128/256 在原 reference/optimized 中由精确标准长度畸形密文触发终止。,key-encapsulation/kem-06_BRA
+kem-07,BRQC,Critical,Confirmed,Implementation,BRQC 存在原字节串接口的一查询 IND-CCA 破坏。,key-encapsulation/kem-07_BRQC
+kem-08,BW-KEM,Medium,Proof gap,Design,BW-KEM 的安全模型、参数、DFR 与 FO 论证存在实质缺口。,key-encapsulation/kem-08_BW-KEM
+kem-09,CheetahKEM,Critical,Lead,Design,Cheetah128 全秘密恢复估算 2^122.933 经典 core-SVP，低于 128 位声明；其他档仅支持投影 MLWE 区分。,key-encapsulation/kem-09_CheetahKEM
+kem-10,C-Multi-UR-AG,High,Proof gap,Design,C-Multi-UR-AG 的候选参数 DFR 项在其 2^64 查询范围即不能支持所宣称级别，另有 DRSL 分布与译码半径错误。,key-encapsulation/kem-10_C-Multi-UR-AG
+kem-11,COMPASS-KEM,Critical,Confirmed,Implementation,COMPASS-KEM 提交的 384/512 档仅返回 256 位共享密钥，低于相应经典目标。,key-encapsulation/kem-11_COMPASS-KEM
+kem-12,CTL,Critical,Confirmed,Design,CTL-512 仅给出 384 位共享密钥，低于 512 位经典要求。,key-encapsulation/kem-12_CTL
+kem-13,DKEM (Ding Key Encapsulation),High,Proof gap,Design,DKEM 的候选特定界在 2^80 解封装查询预算下不足以支持声明。,key-encapsulation/kem-13_DKEM-Ding-Key-Encapsulation
+kem-14,DTRU,Low,Confirmed,Design,DTRU 译码器 15/16 坐标接口不一致，规范操作未定义。,key-encapsulation/kem-14_DTRU
+kem-15,FLIT,Low,Confirmed,Implementation,FLIT 规范与实现的秘密密钥尺寸不一致。,key-encapsulation/kem-15_FLIT
+kem-16,HARE,Low,Confirmed,Design,HARE 的 Reed–Solomon 维数 70/81 不一致，规范编码接口不能按原文执行。,key-encapsulation/kem-16_HARE
+kem-17,HEP-QC,Critical,Confirmed,Design,HEP-QC7 的 512 档只产生 256 位共享密钥。,key-encapsulation/kem-17_HEP-QC
+kem-18,LoongKEM,Low,Confirmed,Design,LoongKEM 解析偏移与规范所需字段不一致。,key-encapsulation/kem-18_LoongKEM
+kem-19,Lore,Medium,Proof gap,Design,Lore-384/512 将 256 位拒绝密钥空间误代入更大的消息空间，数值定理不能由所引 PRF 界推出。,key-encapsulation/kem-19_Lore
+kem-20,MAMBA-Frost,Low,Confirmed,Side-channel,正式 A 组发现 Frost128 源码秘密相关分支，可局部常数时间修补。,key-encapsulation/kem-20_MAMBA-Frost
+kem-21,MAMBA-Viper,High,Proof gap,Design,MAMBA-Viper-128 的公开消息 Grover 路线在查询模型成立，另有候选特定 FO 查询界缺口。,key-encapsulation/kem-21_MAMBA-Viper
+kem-22,Mithril,High,Proof gap,Design,Mithril 的候选特定失败界在 2^80 查询预算下不足。,key-encapsulation/kem-22_Mithril
+kem-23,Mito,Medium,Proof gap,Design,Mito 的投影/权重前提错误，安全归约不能按原论证成立。,key-encapsulation/kem-23_Mito
+kem-24,MORNING-Scabbard,Low,Confirmed,Implementation,Scabbard 公共矩阵生成丢失高位，与规范不符。,key-encapsulation/kem-24_MORNING-Scabbard
+kem-25,NEV,Low,Confirmed,Implementation,NEV 解封装错误返回行为与接口合同不一致。,key-encapsulation/kem-25_NEV
+kem-26,NSS-HQC,High,Proof gap,Design,NSS-HQC 的候选具体参数在规定查询上限下不能由现有界认证。,key-encapsulation/kem-26_NSS-HQC
+kem-27,NTRE,Low,Confirmed,Design,NTRE 所指定的 NTT 参数/接口无法按原文实例化。,key-encapsulation/kem-27_NTRE
+kem-28,OAEP-NTRU,Low,Confirmed,Design,OAEP-NTRU 将字节串传给要求三元向量的接口。,key-encapsulation/kem-28_OAEP-NTRU
+kem-29,Polar-KEM,Low,Confirmed,Design,PolarKEM 原文噪声分布导致超过 1/2 的正确性失败结论。,key-encapsulation/kem-29_Polar-KEM
+kem-30,PolarLAC,Low,Confirmed,Implementation,POLARLAC 规范/实现间共享密钥不匹配。,key-encapsulation/kem-30_PolarLAC
+kem-31,QIMEN-PIKE,Low,Confirmed,Design,QIMEN-PIKE 参数位置及密钥生成接口不一致。,key-encapsulation/kem-31_QIMEN-PIKE
+kem-32,QCTM,Low,Confirmed,Design,QCTM 遗漏 eta 支持参数，使接口不完整。,key-encapsulation/kem-32_QCTM
+kem-33,QUBE,Low,Confirmed,Design,原通用 KEM 图示的接口不构成可执行主流程。,key-encapsulation/kem-33_QUBE
+kem-34,Rudraksh2,Low,Confirmed,Design,Rudraksh2 无噪声编解码 16 种符号中 15 种不能往返。,key-encapsulation/kem-34_Rudraksh2
+kem-35,Scloud+,Low,Confirmed,Design,Scloud+ 的种子长度在规范接口间不一致。,key-encapsulation/kem-35_Scloud+
+kem-36,TRIKE,Low,Confirmed,Design,TRIKE 密钥生成接口不相容。,key-encapsulation/kem-36_TRIKE
+kem-37,TriQ-KEM,Low,Confirmed,Design,TriQ-KEM 原始素数选择器与参数表尺寸不符。,key-encapsulation/kem-37_TriQ-KEM
+kem-38,UVW Key Encapsulation Mechanism,Low,Confirmed,Design,UVW 的 H1 均匀错误分布与稀疏译码器接口不一致。,key-encapsulation/kem-38_UVW-Key-Encapsulation-Mechanism
+kem-39,WeaverKEM,Low,Confirmed,Design,"Weaver 所声明 BCH(63,59,4) 参数无法成立。",key-encapsulation/kem-39_WeaverKEM
+kem-40,YuanYang.KEM,Low,Confirmed,Implementation,YuanYang.KEM 已审节点有原种子展开导致的互操作见证。,key-encapsulation/kem-40_YuanYang.KEM
+kem-41,ZEN,Low,Confirmed,Design,ZEN 的域分离 SM3 接口定义不足。,key-encapsulation/kem-41_ZEN
+kex-01,ADKEX (Authenticated Ding Key Exchange),Medium,Proof gap,Design,ADKEX 打印的安全游戏允许 Test 后 Corrupt，产生模型定义反例；另有无匹配响应者的窄完成行为。,key-exchange/kex-01_ADKEX-Authenticated-Ding-Key-Exchange
+kex-02,AFS-KEX,Medium,Proof gap,Implementation,AFS-KEX 实现预置组合公钥，缺少证明要求的每会话新鲜公钥传输，PFS 论证不能直接覆盖。,key-exchange/kex-02_AFS-KEX
+kex-03,CreTAKE,Low,Confirmed,Design,CreTAKE 在复用 BiT 密钥于 S2S/S2K 角色时签名串无类型标记，可形成角色混淆。,key-exchange/kex-03_CreTAKE
+kex-04,DKEX (Ding Key Exchange),Low,Confirmed,Implementation,DKEX 忽略声明消息长度并越界读。,key-exchange/kex-04_DKEX-Ding-Key-Exchange
+kex-05,Loom,Low,Confirmed,Implementation,Loom 的端序 transcript 不同导致互操作失败。,key-exchange/kex-05_Loom
+kex-06,MAMBA-NIKE,Low,Confirmed,Design,MAMBA-NIKE 的 KDF 接口未唯一规定。,key-exchange/kex-06_MAMBA-NIKE
+kex-07,NEV-AKE,Medium,Proof gap,Design,NEV-AKE 的安全归约/模型绑定存在实质缺口，另有 Low 互操作结果。,key-exchange/kex-07_NEV-AKE
+kex-08,NIIKE,Low,Confirmed,Design,NIIKE 对合法密钥可调用零子群同源，NGCC-III 的 setup 参数亦不相容。,key-exchange/kex-08_NIIKE
+kex-09,TriQ-KEX,Medium,Confirmed,Implementation,TriQ-KEX 成功派生后保留完整会话秘密状态，违反规范要求的擦除，证明与实现不一致。,key-exchange/kex-09_TriQ-KEX
+hash-01,AFS-TrEDM,Low,Confirmed,Side-channel,AFS-TrEDM 非字节对齐 framing 有消息相关分支，机器码保留；可用局部掩码消除。,hash-function/hash-01_AFS-TrEDM
+hash-02,AXIS,Low,Confirmed,Design,AXIS 摘要位到字节映射不唯一，三个配置已有同输入不同输出见证。,hash-function/hash-02_AXIS
+hash-03,C Hash,Low,Confirmed,Design,C-Hash 消息长度端点的填充域接口不一致。,hash-function/hash-03_C-Hash
+hash-04,CHAMP,Critical,Confirmed,Design,CHAMP 原完整哈希存在显式碰撞见证。,hash-function/hash-04_CHAMP
+hash-05,uHash,Critical,Confirmed,Design,uHash-512 在论文经典理想密码模型内，指定合法超长消息的第二原像可用至多 2^464 调用完成。,hash-function/hash-05_uHash
+hash-06,Cuishen,Medium,Confirmed,Design,Cuishen 大量合法长度少规定一个 1024 位解析块，所有配置依赖未规范化补充规则。,hash-function/hash-06_Cuishen
+hash-07,Dragon Hash Family,Medium,Proof gap,Design,Dragon 的候选特定第二原像安全证明存在缺口。,hash-function/hash-07_Dragon-Hash-Family
+hash-08,Duet,Low,Confirmed,Design,Duet 公共接口未规定非固定输出长度的接受、拒绝及实例选择规则。,hash-function/hash-08_Duet
+hash-09,Eijen,Low,Confirmed,Design,Eijen 原 finalization 与 abc 向量在多个配置相差一位。,hash-function/hash-09_Eijen
+hash-10,FEILIAN,Low,Confirmed,Implementation,FEILIAN 的规范/源码常数和 KAT 不一致，导致有限互操作差异。,hash-function/hash-10_FEILIAN
+hash-11,Garnet,Low,Confirmed,Design,Garnet 初始化长度约定不同导致互操作差异。,hash-function/hash-11_Garnet
+hash-13,JuziHash,Critical,Lead,Design,JuziHash-1024 最大合法消息在理想置换模型下有 O(2^970) 第二原像路线，内存 O(2^512)。,hash-function/hash-13_JuziHash
+hash-14,Laurus,Info,Confirmed,Design,Laurus 某同消息跨配置摘要相同及一处矩阵说明反向。,hash-function/hash-14_Laurus
+hash-15,Litchi,Info,Confirmed,Design,Litchi 有非构造性碰撞存在证明和条件容量合并路线。,hash-function/hash-15_Litchi
+hash-16,LLH,Low,Confirmed,Design,LLH 的 IV 端序未统一，出现互操作差异。,hash-function/hash-16_LLH
+hash-17,MasterCube,Medium,Proof gap,Design,MasterCube 声称的逆变换不成立，安全论证前提有误。,hash-function/hash-17_MasterCube
+hash-18,MEGASCON,Critical,Confirmed,Implementation,从提交 Listing 3 编译的 Megascon AVX512 完整实现存在碰撞。,hash-function/hash-18_MEGASCON
+hash-19,MoFang Hash Function,Critical,Lead,Design,MoFang 在布尔方程 S-box 及原始首半块 whitening 解释下存在零搜索完整哈希碰撞。,hash-function/hash-19_MoFang-Hash-Function
+hash-20,MOZI,Info,Confirmed,Design,MOZI 形式 MixColumn 与字面 MUL 是不同映射。,hash-function/hash-20_MOZI
+hash-21,Neulaser,Critical,Confirmed,Implementation,Neulaser 所提交完整参考实现的各固定输出配置存在碰撞。,hash-function/hash-21_Neulaser
+hash-24,QuantaSylva Hash (QSH),Medium,Proof gap,Design,QSH 的候选公共置换结构使所用随机置换论证前提失效。,hash-function/hash-24_QuantaSylva-Hash-QSH
+hash-25,TaiChi,Low,Confirmed,Implementation,TaiChi 分配失败时返回成功，违反 API 合同。,hash-function/hash-25_TaiChi
+hash-26,The Hash Function CHIME,Critical,Probable,Design,CHIME-512 已审节点给出合法 1984 位消息族的 2^66 次哈希碰撞上界，成功率超过 0.9996。,hash-function/hash-26_The-Hash-Function-CHIME
+hash-27,Vedak,Low,Confirmed,Design,Vedak 位到字节映射未唯一指定。,hash-function/hash-27_Vedak
+hash-28,The XRH-1 Hash Function,Low,Confirmed,Design,XRH1 缺失轮常数，已有可执行的分歧见证。,hash-function/hash-28_The-XRH-1-Hash-Function
+hash-29,The XRH-2 Hash Function,Low,Confirmed,Design,XRH2 的 pi 位序约定不唯一。,hash-function/hash-29_The-XRH-2-Hash-Function
+hash-30,ZC-DM,Low,Confirmed,Design,ZC-DM 状态序列化未唯一指定。,hash-function/hash-30_ZC-DM
+hash-31,The ZC-DMC Hash Function,Info,Confirmed,Design,ZC-DMC 有 2^65 元素的完整公开置换零和定理。,hash-function/hash-31_The-ZC-DMC-Hash-Function
+hash-32,ZC-EDMC,Low,Lead,Design,ZC-EDMC 两条显式吸收公式在给定序列化下产生不同空消息摘要。,hash-function/hash-32_ZC-EDMC
+hash-33,Thunder Hash Family,Medium,Proof gap,Design,Thunder-1024 的定理适用条件不覆盖声称的原像端点，另一个显示界在端点大于 1。,hash-function/hash-33_Thunder-Hash-Family
+hash-34,WChain Hash Function,Low,Confirmed,Design,WChain 非字节对齐输入提取规则不唯一，同一 API 调用可产生不同完整摘要。,hash-function/hash-34_WChain-Hash-Function
+hash-35,Wish,Low,Confirmed,Design,Wish 空消息最终常数约定不一致。,hash-function/hash-35_Wish

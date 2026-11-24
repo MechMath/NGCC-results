@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+task_dir=$(cd "$(dirname "$0")/.." && pwd)
+root="$task_dir/submission/Implementations"
+out="$task_dir/experiments"
+cc=${CC:-gcc}
+
+"$cc" ${CFLAGS:--O2 -std=c99} -fPIC -shared \
+  "$out/malloc_fault_wrap.c" -ldl -o "$out/libmalloc_fault_wrap.so"
+
+run_variant() {
+  local label=$1
+  local src=$2
+  shift 2
+
+  "$cc" ${CFLAGS:--O2 -std=c99} -I"$src" \
+    "$out/oom_wrong_message.c" "$@" "$out/libmalloc_fault_wrap.so" -lm \
+    -o "$out/oom_${label}"
+
+  LD_PRELOAD="$out/libmalloc_fault_wrap.so" \
+    "$out/oom_${label}" "$label" | tee "$out/oom_${label}.txt"
+}
+
+run_variant reference "$root/Reference_Implementation/BiT-512" \
+  "$root/Reference_Implementation/BiT-512"/{auxfunc,drng,fips202,ntt,packing,poly,polyvec,sample,sign,SIG_AlgorithmInstance,symmetric}.c
+
+run_variant avx2 "$root/Optimized_Implementation/BiT-512-avx2" \
+  "$root/Optimized_Implementation/BiT-512-avx2"/{auxfunc,consts,drng,fips202,fips202x4,packing,poly,polyvec,sample,sign,SIG_AlgorithmInstance,symmetric}.c \
+  "$root/Optimized_Implementation/BiT-512-avx2"/{f1600x4,ntt,intt,pointwise}.S \
+  -O3 -march=x86-64 -mavx2 -mtune=native -fomit-frame-pointer -DASM_ALIASES

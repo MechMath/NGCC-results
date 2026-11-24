@@ -1,0 +1,665 @@
+#!/usr/bin/env python3
+"""Independent CHIME specification audit.
+
+This file implements the equations in the April 2026 CHIME specification
+without using a CHIME implementation or another attack/report.  The bit-list
+core is the executable reference.  The word core is a separate implementation
+used to cross-check the word-oriented lambda layer.
+
+The two externally visible byte conventions at the bottom are deliberately
+kept outside the abstract bit-string hash.  Their disagreement is the point:
+the specification does not define this conversion.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import argparse
+import json
+from typing import Iterable, Sequence
+
+
+MASK64 = (1 << 64) - 1
+ARRAY_NAMES = ("A0", "A1", "B0", "B1", "C0", "C1")
+
+
+@dataclass(frozen=True)
+class Profile:
+    name: str
+    rate: int
+    rounds: int
+    feeding_forward: bool
+
+
+PROFILES = {
+    "CHIME-512": Profile("CHIME-512", 512, 15, False),
+    "CHIME-1024": Profile("CHIME-1024", 448, 20, True),
+}
+
+
+RC_SEED = 0xDEADBEEF00000000
+GOLDEN = 0x9E3779B97F4A7C15
+
+
+def round_constant(r: int) -> int:
+    return (RC_SEED ^ r ^ ((GOLDEN * (r + 1)) & MASK64)) & MASK64
+
+
+def xor_lists(a: Sequence[int], b: Sequence[int]) -> list[int]:
+    assert len(a) == len(b)
+    return [x ^ y for x, y in zip(a, b)]
+
+
+def permute_blocks(
+    bits: Sequence[int], block_width: int, order: Sequence[int]
+) -> list[int]:
+    assert len(bits) == block_width * len(order)
+    return [
+        bit
+        for block in order
+        for bit in bits[block * block_width : (block + 1) * block_width]
+    ]
+
+
+def rotate_bits(bits: Sequence[int], n: int, left: bool = True) -> list[int]:
+    assert len(bits) == 256
+    out: list[int] = []
+    shift = n % 64
+    if not left:
+        shift = (-shift) % 64
+    for start in range(0, 256, 64):
+        word = list(bits[start : start + 64])
+        out.extend(word[shift:] + word[:shift])
+    return out
+
+
+def shift_bits(bits: Sequence[int], n: int, left: bool) -> list[int]:
+    """Apply an ordinary logical shift independently to each 64-bit word."""
+    assert len(bits) == 256
+    out: list[int] = []
+    for start in range(0, 256, 64):
+        word = list(bits[start : start + 64])
+        if left:
+            out.extend(word[n:] + [0] * n)
+        else:
+            out.extend([0] * n + word[: 64 - n])
+    return out
+
+
+def bits_to_word(bits: Sequence[int]) -> int:
+    value = 0
+    for bit in bits:
+        value = (value << 1) | bit
+    return value
+
+
+def word_to_bits(value: int, width: int = 64) -> list[int]:
+    return [(value >> shift) & 1 for shift in range(width - 1, -1, -1)]
+
+
+def rotr64(value: int, n: int) -> int:
+    n %= 64
+    return ((value >> n) | (value << (64 - n))) & MASK64 if n else value
+
+
+def rotl64(value: int, n: int) -> int:
+    n %= 64
+    return ((value << n) | (value >> (64 - n))) & MASK64 if n else value
+
+
+def lambda_bit_core(state: dict[str, list[int]]) -> dict[str, list[int]]:
+    """Lambda with the three glyph classes shown on rendered page 6."""
+    s = {name: list(state[name]) for name in ARRAY_NAMES}
+
+    s["B1"] = xor_lists(
+        s["B1"], permute_blocks(s["C1"], 32, (3, 0, 1, 2, 7, 4, 5, 6))
+    )
+    s["B0"] = xor_lists(s["B0"], s["A1"])
+    s["C0"] = xor_lists(s["C0"], rotate_bits(s["A0"], 29))
+    s["B1"] = xor_lists(s["B1"], rotate_bits(s["A1"], 31))
+    s["C1"] = xor_lists(s["C1"], rotate_bits(s["A0"], 13))
+    s["C0"] = xor_lists(s["C0"], s["B1"])
+    s["A0"] = permute_blocks(s["A0"], 64, (1, 2, 3, 0))
+    s["C1"] = xor_lists(
+        s["C1"], permute_blocks(s["B1"], 32, (3, 0, 1, 2, 7, 4, 5, 6))
+    )
+    s["A1"] = permute_blocks(s["A1"], 128, (1, 0))
+    s["A0"] = xor_lists(s["A0"], permute_blocks(s["C0"], 64, (1, 0, 3, 2)))
+    s["A1"] = xor_lists(
+        s["A1"], permute_blocks(s["B0"], 32, (3, 0, 1, 2, 7, 4, 5, 6))
+    )
+    s["B1"] = xor_lists(s["B1"], shift_bits(s["A0"], 7, left=True))
+    s["C1"] = xor_lists(s["C1"], shift_bits(s["A1"], 5, left=False))
+    return s
+
+
+def lambda_word_core(state: dict[str, list[int]]) -> dict[str, list[int]]:
+    """Independent word-level implementation used only for cross-checking."""
+    s = {name: list(state[name]) for name in ARRAY_NAMES}
+
+    def perm32(x: list[int]) -> list[int]:
+        parts = [
+            part
+            for word in x
+            for part in ((word >> 32) & 0xFFFFFFFF, word & 0xFFFFFFFF)
+        ]
+        parts = [parts[i] for i in (3, 0, 1, 2, 7, 4, 5, 6)]
+        return [
+            (parts[i] << 32) | parts[i + 1]
+            for i in range(0, len(parts), 2)
+        ]
+
+    def perm64(x: list[int]) -> list[int]:
+        return [x[1], x[2], x[3], x[0]]
+
+    def swap64(x: list[int]) -> list[int]:
+        return [x[1], x[0], x[3], x[2]]
+
+    def swap128(x: list[int]) -> list[int]:
+        return [x[2], x[3], x[0], x[1]]
+
+    def rl(x: list[int], n: int) -> list[int]:
+        return [rotl64(v, n) for v in x]
+
+    def rr(x: list[int], n: int) -> list[int]:
+        return [rotr64(v, n) for v in x]
+
+    def sl(x: list[int], n: int) -> list[int]:
+        return [(v << n) & MASK64 for v in x]
+
+    def sr(x: list[int], n: int) -> list[int]:
+        return [v >> n for v in x]
+
+    def wx(a: list[int], b: list[int]) -> list[int]:
+        return [u ^ v for u, v in zip(a, b)]
+
+    s["B1"] = wx(s["B1"], perm32(s["C1"]))
+    s["B0"] = wx(s["B0"], s["A1"])
+    s["C0"] = wx(s["C0"], rl(s["A0"], 29))
+    s["B1"] = wx(s["B1"], rl(s["A1"], 31))
+    s["C1"] = wx(s["C1"], rl(s["A0"], 13))
+    s["C0"] = wx(s["C0"], s["B1"])
+    s["A0"] = perm64(s["A0"])
+    s["C1"] = wx(s["C1"], perm32(s["B1"]))
+    s["A1"] = swap128(s["A1"])
+    s["A0"] = wx(s["A0"], swap64(s["C0"]))
+    s["A1"] = wx(s["A1"], perm32(s["B0"]))
+    s["B1"] = wx(s["B1"], sl(s["A0"], 7))
+    s["C1"] = wx(s["C1"], sr(s["A1"], 5))
+    return s
+
+
+def sbox3(x0: int, x1: int, x2: int) -> tuple[int, int, int]:
+    # S = [0,5,3,2,6,1,4,7], with x0 the most significant input bit.
+    value = (x0 << 2) | (x1 << 1) | x2
+    out = (0, 5, 3, 2, 6, 1, 4, 7)[value]
+    return (out >> 2) & 1, (out >> 1) & 1, out & 1
+
+
+def chi(state: dict[str, list[int]], r: int) -> dict[str, list[int]]:
+    s = {name: list(state[name]) for name in ARRAY_NAMES}
+    a0, b0, c0 = s["A0"], s["B0"], s["C0"]
+    a1, b1, c1 = s["A1"], s["B1"], s["C1"]
+    if r % 2 == 0:
+        for i in range(256):
+            a0[i], b0[i], c0[i] = sbox3(a0[i], b0[i], c0[i])
+            a1[i], b1[i], c1[i] = sbox3(a1[i], b1[i], c1[i])
+    else:
+        for i in range(256):
+            a0[i], b1[i], c1[i] = sbox3(a0[i], b1[i], c1[i])
+            a1[i], b0[i], c0[i] = sbox3(a1[i], b0[i], c0[i])
+    return s
+
+
+def tau(state: dict[str, list[int]], r: int) -> dict[str, list[int]]:
+    assert r // 3 % 2 in (0, 1)
+    if (r // 3) % 2 == 0:
+        return {
+            "A0": state["C1"],
+            "A1": state["A0"],
+            "B0": state["A1"],
+            "B1": state["B0"],
+            "C0": state["B1"],
+            "C1": state["C0"],
+        }
+    return {
+        "A0": state["A1"],
+        "A1": state["B0"],
+        "B0": state["B1"],
+        "B1": state["C0"],
+        "C0": state["C1"],
+        "C1": state["A0"],
+    }
+
+
+def permutation(state: dict[str, list[int]], rounds: int) -> dict[str, list[int]]:
+    s = {name: list(state[name]) for name in ARRAY_NAMES}
+    for r in range(rounds):
+        s = lambda_bit_core(s)
+        constant = word_to_bits(round_constant(r))
+        s["A0"] = xor_lists(s["A0"], constant * 4)
+        s = chi(s, r)
+        s = tau(s, r)
+    return s
+
+
+def chi_word_core(state: dict[str, list[int]], r: int) -> dict[str, list[int]]:
+    s = {name: list(state[name]) for name in ARRAY_NAMES}
+    old = {name: list(state[name]) for name in ARRAY_NAMES}
+
+    def wx(a: list[int], b: list[int]) -> list[int]:
+        return [u ^ v for u, v in zip(a, b)]
+
+    if r % 2 == 0:
+        s["A0"] = wx(old["A0"], [((~b) & c) & MASK64 for b, c in zip(old["B0"], old["C0"])])
+        s["B0"] = wx(old["B0"], [((~c) & a) & MASK64 for c, a in zip(old["C0"], old["A0"])])
+        s["C0"] = wx(old["C0"], [((~a) & b) & MASK64 for a, b in zip(old["A0"], old["B0"])])
+        s["A1"] = wx(old["A1"], [((~b) & c) & MASK64 for b, c in zip(old["B1"], old["C1"])])
+        s["B1"] = wx(old["B1"], [((~c) & a) & MASK64 for c, a in zip(old["C1"], old["A1"])])
+        s["C1"] = wx(old["C1"], [((~a) & b) & MASK64 for a, b in zip(old["A1"], old["B1"])])
+    else:
+        s["A0"] = wx(old["A0"], [((~b) & c) & MASK64 for b, c in zip(old["B1"], old["C1"])])
+        s["B1"] = wx(old["B1"], [((~c) & a) & MASK64 for c, a in zip(old["C1"], old["A0"])])
+        s["C1"] = wx(old["C1"], [((~a) & b) & MASK64 for a, b in zip(old["A0"], old["B1"])])
+        s["A1"] = wx(old["A1"], [((~b) & c) & MASK64 for b, c in zip(old["B0"], old["C0"])])
+        s["B0"] = wx(old["B0"], [((~c) & a) & MASK64 for c, a in zip(old["C0"], old["A1"])])
+        s["C0"] = wx(old["C0"], [((~a) & b) & MASK64 for a, b in zip(old["A1"], old["B0"])])
+    return s
+
+
+def tau_word_core(state: dict[str, list[int]], r: int) -> dict[str, list[int]]:
+    if (r // 3) % 2 == 0:
+        return {
+            "A0": state["C1"],
+            "A1": state["A0"],
+            "B0": state["A1"],
+            "B1": state["B0"],
+            "C0": state["B1"],
+            "C1": state["C0"],
+        }
+    return {
+        "A0": state["A1"],
+        "A1": state["B0"],
+        "B0": state["B1"],
+        "B1": state["C0"],
+        "C0": state["C1"],
+        "C1": state["A0"],
+    }
+
+
+def permutation_word_core(
+    state: dict[str, list[int]], rounds: int
+) -> dict[str, list[int]]:
+    s = {name: list(state[name]) for name in ARRAY_NAMES}
+    for r in range(rounds):
+        s = lambda_word_core(s)
+        constant = round_constant(r)
+        s["A0"] = [word ^ constant for word in s["A0"]]
+        s = chi_word_core(s, r)
+        s = tau_word_core(s, r)
+    return s
+
+
+def bits_to_word_state(bits: Sequence[int]) -> dict[str, list[int]]:
+    """Decode each 256-bit array as four ordinary big-endian 64-bit words."""
+    assert len(bits) == 1536
+    state: dict[str, list[int]] = {}
+    for name_index, name in enumerate(ARRAY_NAMES):
+        start = 256 * name_index
+        state[name] = [
+            bits_to_word(bits[start + word * 64 : start + (word + 1) * 64])
+            for word in range(4)
+        ]
+    return state
+
+
+def word_state_to_bits(state: dict[str, list[int]]) -> list[int]:
+    return [
+        bit
+        for name in ARRAY_NAMES
+        for word in state[name]
+        for bit in word_to_bits(word)
+    ]
+
+
+def hash_bits_word_core(
+    message: Sequence[int], profile: Profile, toggle_placement: str = "post"
+) -> list[int]:
+    """Second full-profile implementation using the word-level permutation."""
+    if len(message) >= 1 << 64:
+        raise ValueError("message length is outside the supported range")
+    padded = pad_message_bits(message, profile.rate)
+    state_bits = [0] * 1536
+    blocks = [
+        padded[i : i + profile.rate]
+        for i in range(0, len(padded), profile.rate)
+    ]
+    for index, block in enumerate(blocks):
+        if (
+            profile.feeding_forward
+            and toggle_placement == "pre"
+            and index == len(blocks) - 1
+        ):
+            state_bits[-1] ^= 1
+        previous = list(state_bits)
+        for bit_index, bit in enumerate(block):
+            state_bits[bit_index] ^= bit
+        state_bits = word_state_to_bits(
+            permutation_word_core(bits_to_word_state(state_bits), profile.rounds)
+        )
+        if profile.feeding_forward:
+            for bit_index, bit in enumerate(previous[-1088:]):
+                state_bits[profile.rate + bit_index] ^= bit
+    if profile.feeding_forward and toggle_placement == "post":
+        # Section 1.5.2 and Figure 3 place the toggle after the final
+        # feeding-forward recurrence.
+        state_bits[-1] ^= 1
+    return state_bits[:512] if profile.name == "CHIME-512" else state_bits[-1024:]
+
+
+def gf2_rank(rows: Iterable[int], width: int) -> int:
+    basis: dict[int, int] = {}
+    for row in rows:
+        value = row
+        while value:
+            pivot = value.bit_length() - 1
+            if pivot >= width:
+                raise ValueError("row exceeds declared width")
+            if pivot in basis:
+                value ^= basis[pivot]
+            else:
+                basis[pivot] = value
+                break
+    return len(basis)
+
+
+def lambda_rank() -> int:
+    """Exact GF(2) rank of the page-6 top-to-bottom linear map."""
+    rows: list[int] = []
+    for input_index in range(1536):
+        basis = [0] * 1536
+        basis[input_index] = 1
+        output = state_to_bits(lambda_bit_core(bits_to_state(basis)))
+        row = 0
+        for bit in output:
+            row = (row << 1) | bit
+        rows.append(row)
+    return gf2_rank(rows, 1536)
+
+
+def state_to_bits(state: dict[str, list[int]]) -> list[int]:
+    return [bit for name in ARRAY_NAMES for bit in state[name]]
+
+
+def bits_to_state(bits: Sequence[int]) -> dict[str, list[int]]:
+    assert len(bits) == 1536
+    return {
+        name: list(bits[i * 256 : (i + 1) * 256])
+        for i, name in enumerate(ARRAY_NAMES)
+    }
+
+
+def pad_message_bits(message: Sequence[int], rate: int) -> list[int]:
+    padding = [1]
+    zeros = (-(len(message) + 2)) % rate
+    return list(message) + padding + [0] * zeros + [1]
+
+
+def xor_state_with_rate(
+    state: dict[str, list[int]], block: Sequence[int]
+) -> dict[str, list[int]]:
+    bits = state_to_bits(state)
+    assert len(block) <= 512
+    for i, bit in enumerate(block):
+        bits[i] ^= bit
+    return bits_to_state(bits)
+
+
+def hash_bits(
+    message: Sequence[int], profile: Profile, toggle_placement: str = "post"
+) -> list[int]:
+    if len(message) >= 1 << 64:
+        raise ValueError("message length is outside the supported range")
+    padded = pad_message_bits(message, profile.rate)
+    assert len(padded) % profile.rate == 0
+    state = bits_to_state([0] * 1536)
+    blocks = [
+        padded[i : i + profile.rate]
+        for i in range(0, len(padded), profile.rate)
+    ]
+    for index, block in enumerate(blocks):
+        if profile.feeding_forward:
+            if toggle_placement == "pre" and index == len(blocks) - 1:
+                capacity = state_to_bits(state)[profile.rate :]
+                capacity[-1] ^= 1
+                state = bits_to_state(
+                    state_to_bits(state)[: profile.rate] + capacity
+                )
+            previous = state
+            state = xor_state_with_rate(state, block)
+            state = permutation(state, profile.rounds)
+            ff_mask = [0] * profile.rate + state_to_bits(previous)[-1088:]
+            state = bits_to_state(xor_lists(state_to_bits(state), ff_mask))
+        else:
+            state = xor_state_with_rate(state, block)
+            state = permutation(state, profile.rounds)
+    if profile.feeding_forward and toggle_placement == "post":
+        output = state_to_bits(state)
+        output[-1] ^= 1
+        state = bits_to_state(output)
+    output = state_to_bits(state)
+    return output[:512] if profile.name == "CHIME-512" else output[-1024:]
+
+
+def bytes_to_bits(data: bytes, first_bit: str) -> list[int]:
+    if first_bit == "msb":
+        positions = range(7, -1, -1)
+    elif first_bit == "lsb":
+        positions = range(8)
+    else:
+        raise ValueError(first_bit)
+    return [(byte >> pos) & 1 for byte in data for pos in positions]
+
+
+def bits_to_bytes(bits: Sequence[int], first_bit: str) -> bytes:
+    assert len(bits) % 8 == 0
+    out = bytearray()
+    for start in range(0, len(bits), 8):
+        chunk = bits[start : start + 8]
+        if first_bit == "msb":
+            positions = range(7, -1, -1)
+        elif first_bit == "lsb":
+            positions = range(8)
+        else:
+            raise ValueError(first_bit)
+        byte = 0
+        for bit, pos in zip(chunk, positions):
+            byte |= bit << pos
+        out.append(byte)
+    return bytes(out)
+
+
+def hash_bytes(data: bytes, profile: Profile, bit_convention: str) -> bytes:
+    """Use the selected octet-bit order for both input and output."""
+    bits = bytes_to_bits(data, bit_convention)
+    return bits_to_bytes(hash_bits(bits, profile), bit_convention)
+
+
+def selftest() -> dict[str, object]:
+    for convention in ("msb", "lsb"):
+        raw = bytes(range(256)) + b"\x50\x00\xff"
+        assert bits_to_bytes(bytes_to_bits(raw, convention), convention) == raw
+
+    # Compare the separate bit-list and word-list lambda implementations on
+    # deterministic, nontrivial states.
+    for seed in range(8):
+        raw = bytes(((seed + 17) * 29 + i * 101) & 0xFF for i in range(192))
+        bits = bytes_to_bits(raw, "msb")
+        state = bits_to_state(bits)
+        b_out = lambda_bit_core(state)
+        words = {
+            name: [
+                bits_to_word(state[name][i : i + 64])
+                for i in range(0, 256, 64)
+            ]
+            for name in ARRAY_NAMES
+        }
+        w_out = lambda_word_core(words)
+        expected = {
+            name: [
+                bit
+                for word in w_out[name]
+                for bit in word_to_bits(word)
+            ]
+            for name in ARRAY_NAMES
+        }
+        assert b_out == expected
+
+        rounds = 20 if seed % 2 else 15
+        b_perm = permutation(state, rounds)
+        w_perm = permutation_word_core(words, rounds)
+        expected_perm = {
+            name: [
+                bit
+                for word in w_perm[name]
+                for bit in word_to_bits(word)
+            ]
+            for name in ARRAY_NAMES
+        }
+        assert b_perm == expected_perm
+
+    for convention in ("msb", "lsb"):
+        message = bytes_to_bits(b"\x50", convention)
+        for profile in PROFILES.values():
+            assert hash_bits(message, profile) == hash_bits_word_core(message, profile)
+
+    rc_expected = (
+        0x409AC7567F4A7C15,
+        0xE2C34D9DFE94F82B,
+        0x040BD3C37DDF743D,
+        0xA670580AFD29F057,
+        0xC9B8DE707C746C6D,
+        0x6BE164B7FBBEE87B,
+        0x8D29EAFD7B096495,
+        0x2F167324FA53E0AF,
+        0x515EF96A799E5CB5,
+        0xF0877FD1F8E8D8DB,
+        0x12CF8417783354ED,
+        0xB4340A5EF77DD0F7,
+        0xD67C908476C84D1D,
+        0x79A516CBF612C92B,
+        0x9BED9F31755D4535,
+        0x3DDA2578F4A7C15F,
+        0x5F02ABBE73F23D75,
+        0xC14B31E5F33CB96B,
+        0x60B3B62B7287359D,
+        0x82F83C92F1D1B1B7,
+    )
+    assert tuple(round_constant(i) for i in range(20)) == rc_expected
+    return {
+        "lambda_word_crosschecks": 8,
+        "full_permutation_word_crosschecks": 8,
+        "full_profile_word_crosschecks": 4,
+        "octet_roundtrip_bytes": 259,
+        "lambda_rank": lambda_rank(),
+        "round_constants": len(rc_expected),
+    }
+
+
+def sml_vectors() -> list[dict[str, object]]:
+    vectors: list[dict[str, object]] = []
+    for input_hex in ("", "00", "01", "50", "80", "ff", "0001020304050607"):
+        data = bytes.fromhex(input_hex)
+        for convention in ("msb", "lsb"):
+            for profile in PROFILES.values():
+                bits = bytes_to_bits(data, convention)
+                assert hash_bits(bits, profile) == hash_bits_word_core(bits, profile)
+                digest = bits_to_bytes(hash_bits(bits, profile), convention)
+                vectors.append(
+                    {
+                        "profile": profile.name,
+                        "input_hex": input_hex,
+                        "bit_convention": convention,
+                        "output_hex": digest.hex(),
+                    }
+                )
+    return vectors
+
+
+def interface_witnesses() -> dict[str, object]:
+    """Record the input and output packing consequences without conflation."""
+    witnesses: dict[str, object] = {}
+    for profile in PROFILES.values():
+        message = b"\x50"
+        first_msb = hash_bits(bytes_to_bits(message, "msb"), profile)
+        first_lsb = hash_bits(bytes_to_bits(message, "lsb"), profile)
+        assert first_msb == hash_bits_word_core(bytes_to_bits(message, "msb"), profile)
+        assert first_lsb == hash_bits_word_core(bytes_to_bits(message, "lsb"), profile)
+        empty = hash_bits([], profile)
+        assert empty == hash_bits_word_core([], profile)
+        witnesses[profile.name] = {
+            "input_50": {
+                "first_octet_bit_msb": {
+                    "digest_bits": "".join(map(str, first_msb)),
+                    "pack_first_bit_msb": bits_to_bytes(first_msb, "msb").hex(),
+                    "pack_first_bit_lsb": bits_to_bytes(first_msb, "lsb").hex(),
+                },
+                "first_octet_bit_lsb": {
+                    "digest_bits": "".join(map(str, first_lsb)),
+                    "pack_first_bit_msb": bits_to_bytes(first_lsb, "msb").hex(),
+                    "pack_first_bit_lsb": bits_to_bytes(first_lsb, "lsb").hex(),
+                },
+                "digest_bit_hamming_distance": sum(
+                    a != b for a, b in zip(first_msb, first_lsb)
+                ),
+                "digest_bits_equal": first_msb == first_lsb,
+            },
+            "empty_input_output_packing_control": {
+                "digest_bits": "".join(map(str, empty)),
+                "pack_first_bit_msb": bits_to_bytes(empty, "msb").hex(),
+                "pack_first_bit_lsb": bits_to_bytes(empty, "lsb").hex(),
+                "packings_equal": bits_to_bytes(empty, "msb") == bits_to_bytes(empty, "lsb"),
+            },
+            "implementations_equal": True,
+        }
+        if profile.feeding_forward:
+            alt_msb = hash_bits(bytes_to_bits(message, "msb"), profile, "pre")
+            alt_lsb = hash_bits(bytes_to_bits(message, "lsb"), profile, "pre")
+            assert alt_msb == hash_bits_word_core(
+                bytes_to_bits(message, "msb"), profile, "pre"
+            )
+            assert alt_lsb == hash_bits_word_core(
+                bytes_to_bits(message, "lsb"), profile, "pre"
+            )
+            witnesses[profile.name]["section_5_6_toggle_before_final_permutation"] = {
+                "first_octet_bit_msb_pack_msb": bits_to_bytes(
+                    alt_msb, "msb"
+                ).hex(),
+                "first_octet_bit_lsb_pack_msb": bits_to_bytes(
+                    alt_lsb, "msb"
+                ).hex(),
+                "digest_bit_hamming_distance": sum(
+                    a != b for a, b in zip(alt_msb, alt_lsb)
+                ),
+            }
+    return witnesses
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--selftest", action="store_true")
+    parser.add_argument("--vectors", action="store_true")
+    parser.add_argument("--witnesses", action="store_true")
+    args = parser.parse_args()
+    result: dict[str, object] = {}
+    if args.selftest:
+        result["selftest"] = selftest()
+    if args.vectors:
+        result["vectors"] = sml_vectors()
+    if args.witnesses:
+        result["witnesses"] = interface_witnesses()
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")"
+
+expected=2795fd57d3d00791652256362b4a21982116d3aad1fb63633dac923e0e76e05b
+actual=$(sha256sum BAG-Loong.zip | awk '{print $1}')
+test "$actual" = "$expected"
+
+d=experiments/Reference_Implementation/Loong-Block-ms-128
+sources="$d/lib/rbc-47/rbc_elt.c $d/lib/rbc-47/rbc_vec.c \
+$d/src/KEM_AlgorithmInstance.c $d/src/augabidulin.c $d/src/ct_util.c \
+$d/src/gabidulin.c $d/src/loong_api_random.c $d/src/loong_hash.c \
+$d/src/loong_kem.c $d/src/loong_pke.c $d/src/loong_support.c \
+$d/src/loong_xof_reader.c $d/src/parsing.c $d/src/qpoly.c \
+$d/lib/api_pkc/auxfunc.c $d/lib/api_pkc/drng.c"
+flags="-std=c99 -O2 -I$d/src -I$d/lib/api_pkc -I$d/lib/rbc-47"
+
+# Build the experiment-only public-H exporter.
+cc $flags experiments/support_attack_export.c $sources \
+  -o experiments/support_attack_export
+experiments/support_attack_export 90 > experiments/support-attack-export-90.log
+sed -n '1,3p' experiments/support-attack-export-90.log \
+  > experiments/attack-public-input.log
+
+# The solver consumes only metadata, public H and public S.
+python3 experiments/support_attack_solver.py \
+  experiments/attack-public-input.log experiments/attack-recovered-x.bin BAG-Loong-128
+cmp experiments/attack-truth-x.bin experiments/attack-recovered-x.bin
+
+# Build a decapsulation key from public data plus recovered X, with xi=0.
+cc $flags experiments/attack_decapsulate.c $sources \
+  -o experiments/attack_decapsulate
+experiments/attack_decapsulate experiments/attack-recovered-x.bin
+cmp experiments/attack-expected-ss.bin experiments/attack-decapsulated-ss.bin

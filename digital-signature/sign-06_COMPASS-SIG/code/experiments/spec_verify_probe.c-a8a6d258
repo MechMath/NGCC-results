@@ -1,0 +1,179 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "params.h"
+#include "sign.h"
+#include "packing.h"
+#include "polyvec.h"
+#include "poly.h"
+#include "drng.h"
+#include "symmetric.h"
+
+DRNG_ctx drng_algorithm;
+
+enum spec_failure {
+  SPEC_ACCEPT = 0,
+  SPEC_Z_NORM = 1,
+  SPEC_HASH = 2,
+  SPEC_L2_NORM = 3
+};
+
+static enum spec_failure spec_verify(const uint8_t *sig,
+                                     size_t siglen,
+                                     const uint8_t *m,
+                                     size_t mlen,
+                                     const uint8_t *ctx,
+                                     size_t ctxlen,
+                                     const uint8_t *pk) {
+  uint8_t buf[K * POLYW1_PACKEDBYTES];
+  uint8_t rho[SEEDBYTES];
+  uint8_t mu[CRHBYTES];
+  uint8_t tr[TRBYTES];
+  uint8_t c[CTILDEBYTES];
+  uint8_t c2[CTILDEBYTES];
+  uint8_t pre[257];
+  poly cp;
+  polyvecl mat[K], z, z_ntt;
+  polyveck t1, w1, w0;
+  keccak_state state;
+
+  if (siglen != CRYPTO_BYTES || ctxlen > 255)
+    return SPEC_HASH;
+  pre[0] = 0;
+  pre[1] = (uint8_t)ctxlen;
+  memcpy(pre + 2, ctx, ctxlen);
+
+  unpack_pk(rho, &t1, pk);
+  if (unpack_sig(c, &z, sig))
+    return SPEC_HASH;
+  if (polyvecl_chknorm(&z, GAMMA1 - BETA_Z))
+    return SPEC_Z_NORM;
+
+  shake256(tr, TRBYTES, pk, CRYPTO_PUBLICKEYBYTES);
+  shake256_init(&state);
+  shake256_absorb(&state, tr, TRBYTES);
+  shake256_absorb(&state, pre, 2 + ctxlen);
+  shake256_absorb(&state, m, mlen);
+  shake256_finalize(&state);
+  shake256_squeeze(mu, CRHBYTES, &state);
+
+  poly_challenge(&cp, c);
+  poly_ntt(&cp);
+  polyvec_matrix_expand(mat, rho);
+
+  z_ntt = z;
+  polyvecl_ntt(&z_ntt);
+  polyvec_matrix_pointwise_montgomery(&w1, mat, &z_ntt);
+
+  polyveck_shiftl(&t1);
+  for (unsigned int i = 0; i < K; ++i) {
+    for (unsigned int j = 0; j < N; ++j)
+      t1.vec[i].coeffs[j] += 1 << (D - 1);
+  }
+  polyveck_ntt(&t1);
+  polyveck_pointwise_poly_montgomery(&t1, &cp, &t1);
+
+  polyveck_sub(&w1, &w1, &t1);
+  polyveck_reduce(&w1);
+  polyveck_invntt_tomont(&w1);
+  polyveck_caddq(&w1);
+  polyveck_decompose(&w1, &w0, &w1);
+
+  polyveck_pack_w1(buf, &w1);
+  shake256_init(&state);
+  shake256_absorb(&state, mu, CRHBYTES);
+  shake256_absorb(&state, buf, K * POLYW1_PACKEDBYTES);
+  shake256_finalize(&state);
+  shake256_squeeze(c2, CTILDEBYTES, &state);
+  if (memcmp(c, c2, CTILDEBYTES) != 0)
+    return SPEC_HASH;
+  if (polyvec_check_L2_bound(&z, &w0) == 1)
+    return SPEC_L2_NORM;
+  return SPEC_ACCEPT;
+}
+
+int main(int argc, char **argv) {
+  uint8_t seed[64];
+  uint8_t pk[CRYPTO_PUBLICKEYBYTES];
+  uint8_t sk[CRYPTO_SECRETKEYBYTES];
+  uint8_t sig[CRYPTO_BYTES];
+  uint8_t m[256];
+  size_t siglen;
+  unsigned int actual_reject = 0;
+  unsigned int spec_reject = 0;
+  unsigned int spec_z_norm = 0;
+  unsigned int spec_hash = 0;
+  unsigned int spec_l2_norm = 0;
+  int first_failure = -1;
+  uint64_t requested_seed = argc > 1 ? strtoull(argv[1], NULL, 0)
+                                     : UINT64_C(0x243f6a8885a308d3);
+  uint64_t x = requested_seed;
+
+  for (unsigned int i = 0; i < sizeof(seed); ++i) {
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    seed[i] = (uint8_t)(x >> 56);
+  }
+  init_random_number(&drng_algorithm, seed, sizeof(seed));
+  if (crypto_sign_keypair(pk, sk))
+    return 2;
+
+  for (unsigned int trial = 0; trial < 1000; ++trial) {
+    for (unsigned int i = 0; i < sizeof(m); ++i) {
+      x ^= x >> 12;
+      x ^= x << 25;
+      x ^= x >> 27;
+      m[i] = (uint8_t)(x >> 56);
+    }
+    if (crypto_sign_signature(sig, &siglen, m, sizeof(m), NULL, 0, sk))
+      return 3;
+    if (crypto_sign_verify(sig, siglen, m, sizeof(m), NULL, 0, pk)) {
+      ++actual_reject;
+      continue;
+    }
+    enum spec_failure reason =
+        spec_verify(sig, siglen, m, sizeof(m), NULL, 0, pk);
+    if (reason != SPEC_ACCEPT) {
+      ++spec_reject;
+      if (first_failure < 0) {
+        first_failure = (int)trial;
+        if (argc > 2) {
+          char path[512];
+          FILE *f;
+          snprintf(path, sizeof(path), "%s.message.bin", argv[2]);
+          f = fopen(path, "wb");
+          if (!f || fwrite(m, 1, sizeof(m), f) != sizeof(m))
+            return 4;
+          fclose(f);
+          snprintf(path, sizeof(path), "%s.public_key.bin", argv[2]);
+          f = fopen(path, "wb");
+          if (!f || fwrite(pk, 1, sizeof(pk), f) != sizeof(pk))
+            return 5;
+          fclose(f);
+          snprintf(path, sizeof(path), "%s.signature.bin", argv[2]);
+          f = fopen(path, "wb");
+          if (!f || fwrite(sig, 1, siglen, f) != siglen)
+            return 6;
+          fclose(f);
+        }
+      }
+      if (reason == SPEC_Z_NORM)
+        ++spec_z_norm;
+      else if (reason == SPEC_HASH)
+        ++spec_hash;
+      else if (reason == SPEC_L2_NORM)
+        ++spec_l2_norm;
+    }
+  }
+
+  printf("seed=%llu N=%d TAU=%d D=%d trials=1000 first_failure=%d "
+         "actual_reject=%u "
+         "spec_reject=%u "
+         "spec_z_norm=%u spec_hash=%u spec_l2_norm=%u\n",
+         (unsigned long long)requested_seed, N, TAU, D, first_failure,
+         actual_reject, spec_reject, spec_z_norm, spec_hash, spec_l2_norm);
+  return spec_reject != 0 ? 1 : 0;
+}

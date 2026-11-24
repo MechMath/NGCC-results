@@ -1,0 +1,572 @@
+#!/usr/bin/env python3
+"""Independent bit-level simulator for AXIS-512/768/1024.
+
+The implementation follows only hash-02-spec.pdf, especially pages 8--12.
+Register bit i is the coefficient of 2**i.  Thus S[i+1] <- S[i] is a
+left rotation by one bit, and a message byte is consumed least-significant
+bit first.  The PDF does not provide a digest known-answer vector, so this
+file is a specification implementation, not a claim of implementation
+conformance.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Iterator, Sequence
+
+
+# The PDF numbers elements right-to-left, so ExL[0]=0 and UpL[0]=66.
+# These tuples are stored in mathematical index order.
+EXL = (0, 12, 32, 96, 107, 125, 11)
+UPL = (66, 75, 90, 162, 178, 188)
+
+CONSTANTS = (
+    0x243F6A8885A308D3B7E151628AED2A6A9E3779B97F4A7C15,
+    0x7160C6B758B90A76D81F8650363C93F849CA76E19F938DA4,
+    0x70FF7724ACB762F7B54CBDE35B659CC7CD71C257B752EEB5,
+    0x4FD6E6B4FBAB7ECD3120355B0549D6B947EA14CFA7D43857,
+    0x6B634EF404919AAA03F92D7B7FAEEF105DCD2735332E4029,
+    0x53C1A2C96C4DE7E3CD0814056FA6E00BD57AC41E845348D4,
+    0xF3FF90522F99DAE5352FF6633C6EFBA6ABDBF53A09476735,
+    0xB1A270D3653FB5B8D94570230179F8120D875B906F276D2C,
+)
+
+INIT_STATE = sum(c << (192 * j) for j, c in enumerate(CONSTANTS))
+MASK192 = (1 << 192) - 1
+
+INSTANCES = {
+    512: {"nfin": 1024, "ndig": 256, "digest_bits": 512},
+    768: {"nfin": 1024, "ndig": 512, "digest_bits": 768},
+    1024: {"nfin": 1024, "ndig": 1024, "digest_bits": 1024},
+}
+
+
+class SpecError(ValueError):
+    """The request is outside the parameter domain stated by the PDF."""
+
+
+def bit(value: int, index: int) -> int:
+    return (value >> index) & 1
+
+
+def xor_bits(value: int, positions: Iterable[int]) -> int:
+    result = 0
+    for position in positions:
+        result ^= bit(value, position)
+    return result
+
+
+def sbox6(bits_high_to_low: Sequence[int]) -> int:
+    if len(bits_high_to_low) != 6:
+        raise ValueError("SBox takes exactly six bits")
+    x5, x4, x3, x2, x1, x0 = bits_high_to_low
+    return (x5 & x4) ^ (x3 & x2) ^ (x1 & x0)
+
+
+def pad10s11(message_bits: int, message_len_bits: int) -> tuple[int, int, int]:
+    """Return (padded integer, padded length, zero-run parameter s).
+
+    Bit i of the integer is message bit i.  The PDF defines
+
+        Mbar = M || 1 || 0^(s+1) || 1 || Binary64(len(M)),
+        s = (-len(M) - 3) mod 64.
+    """
+    if not 0 <= message_len_bits < (1 << 64):
+        raise SpecError("AXIS requires 0 <= len(M) < 2^64")
+    if message_bits >> message_len_bits:
+        raise SpecError("message integer contains bits beyond its declared length")
+
+    s = (-message_len_bits - 3) % 64
+    position = message_len_bits
+    padded = message_bits
+
+    padded |= 1 << position
+    position += 1
+    position += s + 1  # s+1 zero bits
+    padded |= 1 << position
+    position += 1
+    padded |= message_len_bits << position
+    position += 64
+
+    if position % 64:
+        raise AssertionError("padding did not produce a multiple-of-64 length")
+    if position != message_len_bits + s + 67:
+        raise AssertionError("padding length identity failed")
+    return padded, position, s
+
+
+def n_message_beats(instance: int, padded_len_bits: int) -> int:
+    if padded_len_bits % 64:
+        raise SpecError("padded message length is not a multiple of 64")
+    if instance == 512:
+        return padded_len_bits // 2
+    if instance == 768:
+        remainder = padded_len_bits % 192
+        if remainder == 0:
+            return (2 * padded_len_bits) // 3
+        if remainder == 64:
+            return (2 * padded_len_bits + 64) // 3
+        if remainder == 128:
+            return (2 * padded_len_bits + 32) // 3
+        raise AssertionError("multiple-of-64 length cannot have this remainder")
+    if instance == 1024:
+        return padded_len_bits
+    raise SpecError(f"unsupported AXIS instance: {instance}")
+
+
+def message_pair(
+    instance: int, padded: int, padded_len_bits: int, beat: int, total_beats: int
+) -> tuple[int, int]:
+    """Return the PDF's m_mu||m_nu at one message-processing beat."""
+    if not 0 <= beat < total_beats:
+        raise IndexError(beat)
+
+    if instance == 512:
+        index = 2 * beat
+        return bit(padded, index), bit(padded, index + 1)
+
+    if instance == 1024:
+        index = beat
+        value = bit(padded, index)
+        return value, value
+
+    if instance != 768:
+        raise SpecError(f"unsupported AXIS instance: {instance}")
+
+    # The PDF specifies the final 64 or 32 beats separately when the padded
+    # length has remainder 64 or 128 modulo 192.
+    remainder = padded_len_bits % 192
+    one_bit_tail = 64 if remainder == 64 else 32 if remainder == 128 else 0
+    if beat >= total_beats - one_bit_tail:
+        tail_start_beat = total_beats - one_bit_tail
+        index = padded_len_bits - one_bit_tail
+        index += beat - tail_start_beat
+        value = bit(padded, index)
+        return value, value
+
+    if beat % 2 == 0:
+        index = (3 * beat) // 2
+        value = bit(padded, index)
+        return value, value
+
+    # Odd beat 2k+1 follows even beat 2k, which consumed message bit 3k.
+    index = (3 * beat - 1) // 2
+    return bit(padded, index), bit(padded, index + 1)
+
+
+def message_index_audit(
+    instance: int, padded_len_bits: int
+) -> dict[str, object]:
+    """Audit that the beat schedule consumes every and only padded bit once."""
+    total = n_message_beats(instance, padded_len_bits)
+    consumed: list[int] = []
+    for beat in range(total):
+        if instance == 512:
+            i = 2 * beat
+            consumed.extend((i, i + 1))
+        elif instance == 1024:
+            consumed.append(beat)
+        else:
+            remainder = padded_len_bits % 192
+            tail = 64 if remainder == 64 else 32 if remainder == 128 else 0
+            if beat < total - tail:
+                consumed.append((3 * beat) // 2)
+                if beat % 2:
+                    consumed.append((3 * beat + 1) // 2)
+            else:
+                tail_start_beat = total - tail
+                index = padded_len_bits - tail + beat - tail_start_beat
+                consumed.append(index)
+    if consumed != list(range(padded_len_bits)):
+        raise AssertionError(
+            f"AXIS-{instance} beat schedule mismatch: "
+            f"got {len(consumed)} bits for {padded_len_bits}"
+        )
+    return {
+        "instance": instance,
+        "padded_len_bits": padded_len_bits,
+        "remainder_mod_192": padded_len_bits % 192,
+        "beats": total,
+        "consumed_bits": len(consumed),
+        "injective_sequential": True,
+    }
+
+
+def constant_stream_bit(beat: int, register: int) -> int:
+    """Lowest bit at stream position 8*beat+register.
+
+    The PDF defines an indefinitely repeating initS constant stream.  This
+    implementation starts it at initS bit 0, which is the unique natural
+    reading of "... || initS || initS" in the absence of a stream offset.
+    """
+    stream_index = 8 * beat + register
+    return bit(INIT_STATE, stream_index % 1536)
+
+
+def digest_registers(registers: Sequence[int], extraction_index: int) -> tuple[int, int]:
+    h_mu = (
+        bit(registers[6], extraction_index)
+        ^ bit(registers[4], extraction_index)
+        ^ (bit(registers[2], extraction_index) & bit(registers[0], extraction_index))
+    )
+    h_nu = (
+        bit(registers[7], extraction_index)
+        ^ bit(registers[5], extraction_index)
+        ^ (bit(registers[3], extraction_index) & bit(registers[1], extraction_index))
+    )
+    return h_mu, h_nu
+
+
+@dataclass(frozen=True)
+class HashResult:
+    instance: int
+    message_len_bits: int
+    padded_len_bits: int
+    digest_bits: int
+    digest_int: int
+    digest_hex_low_bit_first: str
+    padding_s: int
+    message_beats: int
+    elapsed_seconds: float
+    conformance_status: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "instance": self.instance,
+            "message_len_bits": self.message_len_bits,
+            "padded_len_bits": self.padded_len_bits,
+            "digest_bits": self.digest_bits,
+            "digest_int": hex(self.digest_int),
+            "digest_hex_low_bit_first": self.digest_hex_low_bit_first,
+            "padding_s": self.padding_s,
+            "message_beats": self.message_beats,
+            "elapsed_seconds": self.elapsed_seconds,
+            "conformance_status": self.conformance_status,
+        }
+
+
+class AXIS:
+    def __init__(self, instance: int, upfull_order: str = "sequential"):
+        if instance not in INSTANCES:
+            raise SpecError(f"instance must be one of {sorted(INSTANCES)}")
+        if upfull_order not in ("sequential", "simultaneous"):
+            raise SpecError("upfull_order must be sequential or simultaneous")
+        self.instance = instance
+        self.spec = INSTANCES[instance]
+        self.upfull_order = upfull_order
+        self.registers = [
+            (INIT_STATE >> (192 * j)) & MASK192 for j in range(8)
+        ]
+        self.digest_bit_positions: list[tuple[int, int]] = []
+
+    def state_int(self) -> int:
+        return sum(r << (192 * j) for j, r in enumerate(self.registers))
+
+    def state_hex(self) -> str:
+        return f"{self.state_int():0384x}"
+
+    def up_res(self, j: int, message_bit: int) -> None:
+        """Apply one UpRes call using the current, sequentially updated state."""
+        j5 = (j + 5) % 8
+        j3 = (j + 3) % 8
+        j1 = (j + 1) % 8
+        jm1 = (j - 1) % 8
+
+        tau = sbox6(
+            (
+                bit(self.registers[j5], EXL[3]),
+                bit(self.registers[j5], EXL[2]),
+                bit(self.registers[j3], EXL[5]),
+                bit(self.registers[j3], EXL[1]),
+                bit(self.registers[j1], EXL[4]),
+                bit(self.registers[j1], EXL[0]),
+            )
+        )
+        current_sbox = sbox6(tuple(bit(self.registers[j], EXL[i]) for i in (5, 2, 4, 1, 3, 0)))
+        b = (
+            message_bit
+            ^ current_sbox
+            ^ tau
+            ^ bit(self.registers[jm1], EXL[6])
+        )
+        t0 = xor_bits(self.registers[j], (EXL[2], EXL[1], EXL[0])) ^ b
+        t1 = xor_bits(self.registers[j], (EXL[5], EXL[4], EXL[3])) ^ b
+
+        value = self.registers[j]
+        for i in (UPL[2], UPL[1], UPL[0]):
+            value ^= t1 << i
+        for i in (UPL[5], UPL[4], UPL[3]):
+            value ^= t0 << i
+
+        # S[191,190,...,0] <- S[0,191,...,1].
+        value = ((value << 1) | (value >> 191)) & MASK192
+        self.registers[j] = value
+
+    def up_full(self, pair: int) -> None:
+        m_mu, m_nu = pair
+        if self.upfull_order == "sequential":
+            for j in range(8):
+                self.up_res(j, m_mu if j % 2 == 0 else m_nu)
+        else:
+            before = self.registers.copy()
+            after: list[int] = []
+            for j in range(8):
+                self.registers = before.copy()
+                self.up_res(j, m_mu if j % 2 == 0 else m_nu)
+                after.append(self.registers[j])
+            self.registers = after
+
+    def re_up_full(self, constant_beat: int) -> None:
+        for j in range(8):
+            self.up_res(j, constant_stream_bit(constant_beat, j))
+
+    def _hash(
+        self, message_bits: int, message_len_bits: int, trace_beats: bool = False
+    ) -> tuple[HashResult, list[dict[str, object]]]:
+        start = time.perf_counter()
+        padded, padded_len, padding_s = pad10s11(message_bits, message_len_bits)
+        message_beats = n_message_beats(self.instance, padded_len)
+        events: list[dict[str, object]] = []
+
+        if trace_beats:
+            events.append(
+                {
+                    "phase": "init",
+                    "beat": -1,
+                    "state_hex": self.state_hex(),
+                    "padding_s": padding_s,
+                    "padded_len_bits": padded_len,
+                    "message_beats": message_beats,
+                }
+            )
+
+        for beat in range(message_beats):
+            pair = message_pair(self.instance, padded, padded_len, beat, message_beats)
+            self.up_full(pair)
+            if trace_beats:
+                events.append(
+                    {
+                        "phase": "message",
+                        "beat": beat,
+                        "m_mu": pair[0],
+                        "m_nu": pair[1],
+                        "state_hex": self.state_hex(),
+                    }
+                )
+
+        if trace_beats:
+            events.append(
+                {"phase": "message_end", "beat": message_beats, "state_hex": self.state_hex()}
+            )
+
+        for beat in range(self.spec["nfin"]):
+            self.re_up_full(beat)
+
+        if trace_beats:
+            events.append(
+                {
+                    "phase": "finalization_end",
+                    "beat": self.spec["nfin"],
+                    "state_hex": self.state_hex(),
+                }
+            )
+
+        digest_bits_without_final_update: list[int] = []
+        for beat in range(self.spec["ndig"]):
+            h_mu, h_nu = digest_registers(self.registers, EXL[0])
+            if self.instance == 512:
+                emitted = (h_nu, h_mu)
+            elif self.instance == 768:
+                emitted = (h_mu,) if beat % 2 == 0 else (h_nu, h_mu)
+            else:
+                emitted = (h_mu,)
+
+            for value in emitted:
+                digest_bits_without_final_update.append(value)
+            if trace_beats:
+                events.append(
+                    {
+                        "phase": "digest",
+                        "beat": beat,
+                        "h_mu": h_mu,
+                        "h_nu": h_nu,
+                        "emitted_low_to_high": emitted,
+                        "state_hex_before_update": self.state_hex(),
+                    }
+                )
+            self.re_up_full(self.spec["nfin"] + beat)
+
+        if len(digest_bits_without_final_update) != self.spec["digest_bits"]:
+            raise AssertionError(
+                f"AXIS-{self.instance} generated {len(digest_bits_without_final_update)} bits"
+            )
+        digest_int = sum(value << i for i, value in enumerate(digest_bits_without_final_update))
+        digest_hex = digest_int.to_bytes(self.spec["digest_bits"] // 8, "little").hex()
+        elapsed = time.perf_counter() - start
+        result = HashResult(
+            instance=self.instance,
+            message_len_bits=message_len_bits,
+            padded_len_bits=padded_len,
+            digest_bits=self.spec["digest_bits"],
+            digest_int=digest_int,
+            digest_hex_low_bit_first=digest_hex,
+            padding_s=padding_s,
+            message_beats=message_beats,
+            elapsed_seconds=elapsed,
+            conformance_status="unresolved: no digest KAT value in allowlisted PDF",
+        )
+        if trace_beats:
+            events.append(
+                {
+                    "phase": "digest_end",
+                    "beat": self.spec["ndig"],
+                    "digest_hex_low_bit_first": digest_hex,
+                    "state_hex": self.state_hex(),
+                }
+            )
+        return result, events
+
+    def hash_bytes(self, message: bytes, trace_beats: bool = False):
+        return self._hash(
+            int.from_bytes(message, "little"),
+            len(message) * 8,
+            trace_beats=trace_beats,
+        )
+
+    def hash_hex(self, message_hex: str, trace_beats: bool = False):
+        return self._hash(
+            int.from_bytes(bytes.fromhex(message_hex), "little"),
+            len(bytes.fromhex(message_hex)) * 8,
+            trace_beats=trace_beats,
+        )
+
+
+def axis_hash(
+    instance: int, message: bytes, upfull_order: str = "sequential"
+) -> HashResult:
+    result, _ = AXIS(instance, upfull_order=upfull_order).hash_bytes(message)
+    return result
+
+
+def self_test() -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    for length in list(range(0, 257)) + [511, 512, 1023, 1024, 65535]:
+        _, padded_len, s = pad10s11(0, length)
+        if padded_len % 64:
+            raise AssertionError("padding alignment")
+        if padded_len != length + s + 67:
+            raise AssertionError("padding overhead")
+        checks.append({"length": length, "padded_len": padded_len, "s": s})
+
+    for instance in (512, 768, 1024):
+        for message_len in (0, 1, 63, 64, 65, 127, 128, 129, 191, 192, 193, 255, 256, 511):
+            _, padded_len, _ = pad10s11(0, message_len)
+            audit = message_index_audit(instance, padded_len)
+            if not audit["injective_sequential"]:
+                raise AssertionError(audit)
+
+    reproducibility: list[dict[str, object]] = []
+    for instance in (512, 768, 1024):
+        result1 = axis_hash(instance, b"AXIS simulator self-test")
+        result2 = axis_hash(instance, b"AXIS simulator self-test")
+        if result1.digest_int != result2.digest_int:
+            raise AssertionError("nondeterministic digest")
+        reproducibility.append(result1.as_dict())
+
+    return {
+        "status": "ok",
+        "checks": {
+            "padding_cases": len(checks),
+            "message_schedule_cases": 3 * 14,
+            "reproducibility_cases": 3,
+        },
+        "interpretations": [
+            "message bits within each byte are consumed least-significant first",
+            "UpFull evaluates j=0..7 sequentially using the current state",
+            "the periodic initS finalization stream starts at initS bit 0",
+        ],
+        "conformance": "unresolved: the allowlisted PDF provides no digest KAT value",
+        "reproducibility": reproducibility,
+    }
+
+
+def cli() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    for command in ("hash", "trace"):
+        p = sub.add_parser(command)
+        p.add_argument("--instance", type=int, choices=sorted(INSTANCES), required=True)
+        group = p.add_mutually_exclusive_group(required=True)
+        group.add_argument("--message-hex", default=None)
+        group.add_argument("--message-file", type=Path, default=None)
+        group.add_argument("--message-text", default=None)
+        if command == "trace":
+            p.add_argument("--trace-beats", action="store_true")
+            p.add_argument("--compact", action="store_true")
+
+    p_selftest = sub.add_parser("selftest")
+    p_selftest.set_defaults(command="selftest")
+
+    p_compare = sub.add_parser("compare-upfull-order")
+    p_compare.add_argument("--instance", type=int, choices=sorted(INSTANCES), required=True)
+    p_compare.add_argument("--message-hex", default="")
+    p_compare.set_defaults(command="compare-upfull-order")
+
+    args = parser.parse_args()
+    if args.command == "selftest":
+        print(json.dumps(self_test(), indent=2, sort_keys=True))
+        return 0
+    if args.command == "compare-upfull-order":
+        message = bytes.fromhex(args.message_hex)
+        sequential = axis_hash(args.instance, message, upfull_order="sequential")
+        simultaneous = axis_hash(args.instance, message, upfull_order="simultaneous")
+        print(
+            json.dumps(
+                {
+                    "instance": args.instance,
+                    "message_hex": message.hex(),
+                    "message_len_bits": len(message) * 8,
+                    "sequential_digest": sequential.digest_hex_low_bit_first,
+                    "simultaneous_digest": simultaneous.digest_hex_low_bit_first,
+                    "digests_equal": sequential.digest_int == simultaneous.digest_int,
+                    "classification": (
+                        "interpretation difference; PDF gives an ordered in-place loop, "
+                        "so this is not by itself a confirmed interoperability defect"
+                    ),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    if args.message_file is not None:
+        message = args.message_file.read_bytes()
+    elif args.message_text is not None:
+        message = args.message_text.encode("utf-8")
+    else:
+        message = bytes.fromhex(args.message_hex)
+
+    result, events = AXIS(args.instance).hash_bytes(
+        message, trace_beats=args.command == "trace" and args.trace_beats
+    )
+    payload = result.as_dict()
+    payload["message_sha256"] = hashlib.sha256(message).hexdigest()
+    payload["message_hex"] = message.hex()
+    if args.command == "trace":
+        if args.compact:
+            payload["events"] = events[:1] + events[-3:]
+        else:
+            payload["events"] = events
+    print(json.dumps(payload, indent=None if args.command == "trace" else 2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli())

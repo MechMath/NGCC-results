@@ -1,0 +1,90 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <dlfcn.h>
+
+#include "SIG_AlgorithmInstance.h"
+#include "drng.h"
+#include "params.h"
+
+DRNG_ctx drng_algorithm;
+
+static void fill(uint8_t *p, size_t n, unsigned tag)
+{
+    uint32_t x = 0x9e3779b9u ^ tag;
+    for (size_t i = 0; i < n; i++) {
+        x = x * 1664525u + 1013904223u;
+        p[i] = (uint8_t)(x >> 24);
+    }
+}
+
+int main(void)
+{
+    enum { MESSAGE_BYTES = 5000, SEED_BYTES = 512 };
+    uint8_t seed[SEED_BYTES];
+    static uint8_t m1[MESSAGE_BYTES], m2[MESSAGE_BYTES];
+    static uint8_t pk[BIT_PUBLICKEYBYTES], sk[BIT_SECRETKEYBYTES];
+    static uint8_t first[BIT_SIGNBYTES], faulted[BIT_SIGNBYTES];
+    static uint8_t control[BIT_SIGNBYTES];
+    unsigned long long pk_len = BIT_PUBLICKEYBYTES;
+    unsigned long long sk_len = BIT_SECRETKEYBYTES;
+    unsigned long long first_len = BIT_SIGNBYTES;
+    unsigned long long faulted_len = BIT_SIGNBYTES;
+    unsigned long long control_len = BIT_SIGNBYTES;
+    int rc_keygen, rc_first, rc_faulted, rc_control;
+    int f_m1, f_m2, c_m1, c_m2;
+    void (*arm_fn)(size_t) = (void (*)(size_t))dlsym(RTLD_DEFAULT, "fault_arm");
+    void (*disarm_fn)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "fault_disarm");
+    uint64_t (*count_fn)(void) = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "fault_get_count");
+
+    if (!arm_fn || !disarm_fn || !count_fn) {
+        fprintf(stderr, "malloc fault interposer is not preloaded\n");
+        return 4;
+    }
+
+    fill(seed, sizeof seed, 1);
+    fill(m1, sizeof m1, 2);
+    fill(m2, sizeof m2, 3);
+    if (memcmp(m1, m2, sizeof m1) == 0) {
+        fprintf(stderr, "messages unexpectedly equal\n");
+        return 2;
+    }
+
+    init_random_number(&drng_algorithm, seed, sizeof(seed));
+    rc_keygen = sig_keygen(pk, &pk_len, sk, &sk_len);
+    rc_first = sig_sign(sk, sk_len, m1, sizeof m1, first, &first_len);
+    if (rc_keygen != 0 || rc_first != 0) {
+        fprintf(stderr, "setup failure keygen=%d first_sign=%d\n", rc_keygen, rc_first);
+        return 3;
+    }
+
+    arm_fn(4096);
+    rc_faulted = sig_sign(sk, sk_len, m2, sizeof m2, faulted, &faulted_len);
+    disarm_fn();
+    f_m1 = sig_verify(pk, pk_len, faulted, faulted_len, m1, sizeof m1);
+    f_m2 = sig_verify(pk, pk_len, faulted, faulted_len, m2, sizeof m2);
+
+    rc_control = sig_sign(sk, sk_len, m2, sizeof m2, control, &control_len);
+    c_m1 = sig_verify(pk, pk_len, control, control_len, m1, sizeof m1);
+    c_m2 = sig_verify(pk, pk_len, control, control_len, m2, sizeof m2);
+
+    printf("pk_len=%llu\n", pk_len);
+    printf("sk_len=%llu\n", sk_len);
+    printf("first_sign_rc=%d\n", rc_first);
+    printf("first_sign_len=%llu\n", first_len);
+    printf("malloc_fault_count=%llu\n", (unsigned long long)count_fn());
+    printf("faulted_sign_rc=%d\n", rc_faulted);
+    printf("faulted_sign_len=%llu\n", faulted_len);
+    printf("verify_faulted_under_m1=%d\n", f_m1);
+    printf("verify_faulted_under_m2=%d\n", f_m2);
+    printf("control_sign_rc=%d\n", rc_control);
+    printf("control_sign_len=%llu\n", control_len);
+    printf("verify_control_under_m1=%d\n", c_m1);
+    printf("verify_control_under_m2=%d\n", c_m2);
+    printf("wrong_message_success_reproduced=%d\n",
+           count_fn() == 1 && rc_faulted == 0 &&
+           f_m1 == 0 && f_m2 < 0 &&
+           rc_control == 0 && c_m1 < 0 && c_m2 == 0);
+    return 0;
+}

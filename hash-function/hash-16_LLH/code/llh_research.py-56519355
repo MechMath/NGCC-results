@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+"""Literal research model for the LLH specification in hash-16-spec.pdf.
+
+This is a working model, not a claimed reference implementation.  State rows are
+integers whose bit j is the specification's column j.  The bit ordering follows
+the document's little-endian discussion and its row-major S24 diagram.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass
+import random
+
+
+SHIFTS = {
+    32: [
+        3, 16, 13, 26, 8, 29, 2, 23, 21, 18, 31, 28,
+        10, 15, 4, 9, 7, 20, 17, 30, 12, 1, 6, 27,
+    ],
+    64: [
+        2, 25, 20, 51, 15, 40, 37, 6, 36, 63, 62, 33,
+        1, 30, 31, 4, 38, 5, 8, 47, 19, 52, 57, 34,
+    ],
+    96: [
+        2, 11, 28, 53, 19, 34, 57, 88, 52, 73, 6, 43,
+        5, 32, 67, 14, 70, 7, 48, 1, 55, 94, 45, 4,
+    ],
+    128: [
+        1, 16, 55, 118, 10, 29, 72, 11, 35, 58, 105, 48,
+        76, 103, 26, 101, 5, 36, 91, 42, 78, 113, 44, 127,
+    ],
+}
+
+
+ROUND_CONSTANTS = {
+    32: [
+        0xB7E15162, 0x8AED2A6A, 0xBF715880, 0x9CF4F3C7,
+        0x62E7160F, 0x38B4DA56, 0xA784D904, 0x5190CFEF,
+        0x324E7738, 0x926CFBE5, 0xF4BF8D8D, 0x8C31D763,
+        0xDA06C80A, 0xBB1185EB, 0x4F7C7B57, 0x57F59584,
+    ],
+    64: [
+        0xB7E151628AED2A6A, 0xBF7158809CF4F3C7,
+        0x62E7160F38B4DA56, 0xA784D9045190CFEF,
+        0x324E7738926CFBE5, 0xF4BF8D8D8C31D763,
+        0xDA06C80ABB1185EB, 0x4F7C7B5757F59584,
+        0x90CFD47D7C19BB42, 0x158D9554F7B46BCE,
+        0xD55C4D79FD5F24D6, 0x613C31C3839A2DDF,
+        0x8A9A276BCFBFA1C8, 0x77C56284DAB79CD4,
+        0xC2B3293D20E9E5EA, 0xF02AC60ACC93ED87,
+        0x4422A52ECB238FEE, 0xE5AB6ADD835FD1A0,
+        0x753D0A8F78E537D2, 0xB95BB79D8DCAEC64,
+        0x2C1E9F23B829B5C2, 0x780BF38737DF8BB3,
+        0x00D01334A0D0BD86, 0x45CBFA73A6160FFE,
+    ],
+    96: [
+        0xB7E151628AED2A6ABF715880, 0x9CF4F3C762E7160F38B4DA56,
+        0xA784D9045190CFEF324E7738, 0x926CFBE5F4BF8D8D8C31D763,
+        0xDA06C80ABB1185EB4F7C7B57, 0x57F5958490CFD47D7C19BB42,
+        0x158D9554F7B46BCED55C4D79, 0xFD5F24D6613C31C3839A2DDF,
+        0x8A9A276BCFBFA1C877C56284, 0xDAB79CD4C2B3293D20E9E5EA,
+        0xF02AC60ACC93ED874422A52E, 0xCB238FEEE5AB6ADD835FD1A0,
+        0x753D0A8F78E537D2B95BB79D, 0x8DCAEC642C1E9F23B829B5C2,
+        0x780BF38737DF8BB300D01334, 0xA0D0BD8645CBFA73A6160FFE,
+        0x393C48CBBBCA060F0FF8EC6D, 0x31BEB5CCEED7F2F0BB088017,
+        0x163BC60DF45A0ECB1BCD289B, 0x06CBBFEA21AD08E1847F3F73,
+        0x78D56CED94640D6EF0D3D37B, 0xE67008E186D1BF275B9B241D,
+        0xEB64749A47DFDFB96632C3EB, 0x061B6472BBF84C26144E49C2,
+        0xD04C324EF10DE513D3F5114B, 0x8B5D374D93CB8879C7D52FFD,
+        0x72BA0AAE7277DA7BA1B4AF14, 0x88D8E836AF14865E6C37AB68,
+        0x76FE690B571121382AF341AF, 0xE94F77BCF06C83B8FF5675F0,
+        0x979074AD9A787BC5B9BD4B0C, 0x5937D3EDE4C3A79396215EDA,
+    ],
+    128: [
+        0xB7E151628AED2A6ABF7158809CF4F3C7,
+        0x62E7160F38B4DA56A784D9045190CFEF,
+        0x324E7738926CFBE5F4BF8D8D8C31D763,
+        0xDA06C80ABB1185EB4F7C7B5757F59584,
+        0x90CFD47D7C19BB42158D9554F7B46BCE,
+        0xD55C4D79FD5F24D6613C31C3839A2DDF,
+        0x8A9A276BCFBFA1C877C56284DAB79CD4,
+        0xC2B3293D20E9E5EAF02AC60ACC93ED87,
+        0x4422A52ECB238FEEE5AB6ADD835FD1A0,
+        0x753D0A8F78E537D2B95BB79D8DCAEC64,
+        0x2C1E9F23B829B5C2780BF38737DF8BB3,
+        0x00D01334A0D0BD8645CBFA73A6160FFE,
+        0x393C48CBBBCA060F0FF8EC6D31BEB5CC,
+        0xEED7F2F0BB088017163BC60DF45A0ECB,
+        0x1BCD289B06CBBFEA21AD08E1847F3F73,
+        0x78D56CED94640D6EF0D3D37BE67008E1,
+        0x86D1BF275B9B241DEB64749A47DFDFB9,
+        0x6632C3EB061B6472BBF84C26144E49C2,
+        0xD04C324EF10DE513D3F5114B8B5D374D,
+        0x93CB8879C7D52FFD72BA0AAE7277DA7B,
+        0xA1B4AF1488D8E836AF14865E6C37AB68,
+        0x76FE690B571121382AF341AFE94F77BC,
+        0xF06C83B8FF5675F0979074AD9A787BC5,
+        0xB9BD4B0C5937D3EDE4C3A79396215EDA,
+        0xB1F57D0B5A7DB461DD8F3C75540D0012,
+        0x1FD56E95F8C731E9C4D7221BBED0C62B,
+        0xB5A87804B679A0CAA41D802A4604C311,
+        0xB71DE3E5C6B400E024A6668CCF2E2DE8,
+        0x6876E4F5C50000F0A93B3AA7E6342B30,
+        0x2A0A47373B25F73E3B26D569FE2291AD,
+        0x36D6A147D1060B871A2801F978376408,
+        0x2FF592D9140DB1E9399DF4B0E14CA8E8,
+        0x8EE9110B2BD4FA98EED150CA6DD89322,
+        0x45EF7592C703F532CE3A30CD31C070EB,
+        0x36B4195FF33FB1C66C7D70F93918107C,
+        0xE2051FED33F6D1DE9491C7DEA6A5A442,
+        0xE154C8BB6D8D0362803BC248D414478C,
+        0x2AFB07FFE78E89B9FECA7E3060C08F0D,
+        0x61F8E36801DF66D1D8F9392E52CAEF06,
+        0x53199479DF2BE64BBAAB008CA8A06FDA,
+    ],
+}
+
+
+DERANGEMENT = [
+    4, 9, 18, 23, 8, 1, 22, 15, 12, 17, 6, 3,
+    20, 5, 10, 19, 0, 21, 14, 11, 16, 13, 2, 7,
+]
+
+D_MATRIX = [
+    [0, 1, 1, 1],
+    [1, 0, 1, 1],
+    [1, 1, 0, 1],
+    [1, 1, 1, 0],
+]
+
+
+def rotr6(x: int, n: int) -> int:
+    return ((x >> n) | (x << (6 - n))) & 0x3F
+
+
+def s6(x: int) -> int:
+    return x ^ rotr6(x, 2) ^ (rotr6(x, 1) & rotr6(x, 3)) ^ 0x1B
+
+
+def s24(x: int) -> int:
+    v = [(x >> i) & 1 for i in range(24)]
+    y = [0] * 24
+    for col in range(4):
+        word = sum(v[col + 4 * row] << row for row in range(6))
+        out = s6(word)
+        for row in range(6):
+            y[col + 4 * row] = (out >> row) & 1
+    z = [y[DERANGEMENT[i]] for i in range(24)]
+    out = []
+    for row in range(6):
+        r = z[4 * row:4 * row + 4]
+        out.extend(sum(r[i] * D_MATRIX[i][j] for i in range(4)) & 1
+                   for j in range(4))
+    return sum(bit << i for i, bit in enumerate(out))
+
+
+def rol_word(x: int, n: int, w: int) -> int:
+    mask = (1 << w) - 1
+    n %= w
+    return ((x << n) | (x >> (w - n))) & mask
+
+
+def sub_column(state: list[int], w: int) -> list[int]:
+    out = [0] * 24
+    for j in range(w):
+        x = sum(((state[i] >> j) & 1) << i for i in range(24))
+        y = s24(x)
+        for i in range(24):
+            out[i] |= ((y >> i) & 1) << j
+    return out
+
+
+def shift_rows(state: list[int], w: int) -> list[int]:
+    return [rol_word(state[i], SHIFTS[w][i], w) for i in range(24)]
+
+
+def round_fun(state: list[int], w: int, round_index: int) -> list[int]:
+    out = shift_rows(sub_column(state, w), w)
+    out[23] ^= ROUND_CONSTANTS[w][round_index]
+    return out
+
+
+def permutation(state: list[int], w: int, rounds: int) -> list[int]:
+    out = state.copy()
+    for t in range(rounds):
+        out = round_fun(out, w, t)
+    return out
+
+
+def pad_bits(message: list[int], rate: int) -> list[int]:
+    if not message or len(message) % rate == 0:
+        return message.copy()
+    return message + [1] * (-len(message) % rate)
+
+
+def absorb_block(state: list[int], block: list[int], w: int, rounds: int) -> list[int]:
+    rate_words = 8
+    mask = (1 << w) - 1
+    permuted = permutation(state, w, rounds)
+    out = permuted.copy()
+    for i in range(rate_words):
+        word = sum(block[i * w + j] << j for j in range(w))
+        out[i] ^= word
+    for i in range(rate_words, 24):
+        out[i] ^= state[i]
+    assert all(0 <= x <= mask for x in out)
+    return out
+
+
+def hash_bits(message: list[int], w: int, rounds: int) -> list[int]:
+    b = 24 * w
+    rate = 8 * w
+    length = len(message)
+    padded = pad_bits(message, rate)
+    state = [0] * 24
+    length &= (1 << 64) - 1
+    if w == 32:
+        state[-2] = length & ((1 << 32) - 1)
+        state[-1] = length >> 32
+    elif w == 64:
+        state[-1] = length
+    else:
+        # Last 64 bits of the state occupy the high 64 bits of word 23.
+        state[-1] = length << (w - 64)
+    for pos in range(0, len(padded), rate):
+        state = absorb_block(state, padded[pos:pos + rate], w, rounds)
+    state = permutation(state, w, rounds)
+    return [(state[i] >> j) & 1 for i in range(8) for j in range(w)]
+
+
+def differential_profile(table: list[int], alphabet: int) -> tuple[int, list[tuple[int, int, list[int]]]]:
+    maximum = 0
+    rows = []
+    for a in range(1, alphabet):
+        counts = Counter(table[x] ^ table[x ^ a] for x in range(alphabet))
+        high = max(counts.values())
+        maximum = max(maximum, high)
+        rows.append((a, high, sorted(b for b, n in counts.items() if n == high)))
+    return maximum, rows
+
+
+def walsh_profile(table: list[int], alphabet: int) -> tuple[int, list[tuple[int, int, int]]]:
+    maximum = 0
+    rows = []
+    for a in range(alphabet):
+        for b in range(1, alphabet):
+            total = sum(
+                -1 if ((a & x).bit_count() ^ (b & table[x]).bit_count()) & 1 else 1
+                for x in range(alphabet)
+            )
+            maximum = max(maximum, abs(total))
+            rows.append((a, b, total))
+    return maximum, rows
+
+
+def dependence_growth(w: int = 32, rounds: int = 4) -> list[list[int]]:
+    """Conservative support of each round-output bit in the round's input bits."""
+    # First derive the input support of every bit of S24.  Checking both zero and
+    # one for each coordinate is exact for an influence test: if a coordinate
+    # changes any output on those points, it is a true structural dependency.
+    support24 = []
+    for out_bit in range(24):
+        support = 0
+        for in_bit in range(24):
+            unit = 1 << in_bit
+            if ((s24(0) >> out_bit) & 1) != ((s24(unit) >> out_bit) & 1):
+                support |= 1 << in_bit
+        support24.append(support)
+
+    # Conservative support propagation.  Every round output bit can depend on
+    # every S24 input bit that influences some S24 output bit in its slice.
+    deps = []
+    for out_i in range(24):
+        row = []
+        for j in range(w):
+            support = 0
+            for in_i in range(24):
+                if (support24[out_i] >> in_i) & 1:
+                    support |= 1 << (in_i * w + j)
+            row.append(support)
+        deps.append(row)
+    return deps
+
+
+def main() -> None:
+    print("S6", differential_profile([s6(x) for x in range(64)], 64)[0],
+          walsh_profile([s6(x) for x in range(64)], 64)[0])
+    for w in (32, 64, 96, 128):
+        rng = random.Random(w)
+        state = [rng.getrandbits(w) for _ in range(24)]
+        rounds = {32: 16, 64: 24, 96: 32, 128: 40}[w]
+        out = permutation(state, w, rounds)
+        print("permutation", w, len(out), sum(x.bit_count() for x in out))
+
+
+if __name__ == "__main__":
+    main()

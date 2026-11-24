@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+impl="$root/submission/Implementations/Reference_Implementation/COMPASS-SIG-128"
+common="$root/submission/Implementations/Reference_Implementation"
+out="${1:-/tmp/compass-sig-spec-verify128}"
+
+cc -O2 -DCOMPASS_SIG_MODE=128 \
+  -I"$impl" -I"$common" \
+  -o "$out" \
+  "$root/experiments/spec_verify_probe.c" \
+  "$impl/sign.c" "$impl/packing.c" "$impl/polyvec.c" "$impl/poly.c" \
+  "$impl/ntt.c" "$impl/reduce.c" "$impl/rounding.c" \
+  "$impl/symmetric-shake.c" "$impl/drng.c" "$impl/auxfunc.c" \
+  "$common/fips202.c"
+
+mkdir -p "$root/experiments/reproduced"
+set +e
+"$out" 1 "$root/experiments/reproduced/spec_failure_128"
+probe_status=$?
+set -e
+if [[ $probe_status -ne 1 ]]; then
+  echo "unexpected probe status: $probe_status (expected 1, meaning disagreements were found)" >&2
+  exit "$probe_status"
+fi
+
+sha256sum \
+  "$root/experiments/reproduced/spec_failure_128.message.bin" \
+  "$root/experiments/reproduced/spec_failure_128.public_key.bin" \
+  "$root/experiments/reproduced/spec_failure_128.signature.bin"
+
+cmp "$root/experiments/spec_failure_128.message.bin" \
+    "$root/experiments/reproduced/spec_failure_128.message.bin"
+cmp "$root/experiments/spec_failure_128.public_key.bin" \
+    "$root/experiments/reproduced/spec_failure_128.public_key.bin"
+cmp "$root/experiments/spec_failure_128.signature.bin" \
+    "$root/experiments/reproduced/spec_failure_128.signature.bin"
+echo "witness reproduction: byte-identical"

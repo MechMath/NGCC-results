@@ -1,0 +1,74 @@
+#include <inttypes.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "params.h"
+#include "poly.h"
+
+int main(void) {
+  uint8_t seed[CTILDEBYTES];
+  uint64_t zero_forbidden = 0;
+  uint64_t total_forbidden = 0;
+  uint64_t nonzero_low = 0;
+  uint64_t nonzero_high = 0;
+  uint64_t negatives = 0;
+  uint64_t negatives_after_64 = 0;
+  uint64_t weight_errors = 0;
+
+  for (unsigned int trial = 0; trial < 10000; ++trial) {
+    poly c;
+    uint64_t x = UINT64_C(0x9e3779b97f4a7c15) ^
+                 (UINT64_C(0xd1b54a32d192ed03) * (trial + 1));
+    for (unsigned int i = 0; i < CTILDEBYTES; ++i) {
+      x ^= x >> 12;
+      x ^= x << 25;
+      x ^= x >> 27;
+      seed[i] = (uint8_t)((x * UINT64_C(2685821657736338717)) >> 56);
+    }
+
+    poly_challenge(&c, seed);
+
+    unsigned int weight = 0;
+    for (unsigned int i = 0; i < N; ++i) {
+      if (c.coeffs[i] != 0) {
+        ++weight;
+        if (c.coeffs[i] < 0)
+          ++negatives;
+        else if (c.coeffs[i] != 1)
+          return 2;
+
+        if (i < N - TAU)
+          ++nonzero_low;
+        else
+          ++nonzero_high;
+      }
+      if (i >= N - TAU) {
+        unsigned int sign_index = i - (N - TAU);
+        if (sign_index >= 64 && c.coeffs[i] < 0)
+          ++negatives_after_64;
+      }
+      if (i >= 256 && i < N - TAU) {
+        ++total_forbidden;
+        if (c.coeffs[i] == 0)
+          ++zero_forbidden;
+      }
+    }
+    if (weight != TAU)
+      ++weight_errors;
+  }
+
+  printf("N=%d TAU=%d CTILDEBYTES=%d trials=10000\n", N, TAU,
+         CTILDEBYTES);
+  printf("weight_errors=%" PRIu64 "\n", weight_errors);
+  printf("zero_forbidden=%" PRIu64 " / %" PRIu64 "\n", zero_forbidden,
+         total_forbidden);
+  printf("nonzero_low=%" PRIu64 " nonzero_high=%" PRIu64 "\n",
+         nonzero_low, nonzero_high);
+  printf("negatives=%" PRIu64 " negatives_after_64=%" PRIu64 "\n",
+         negatives, negatives_after_64);
+  return weight_errors != 0 || zero_forbidden != total_forbidden ||
+                 negatives_after_64 != 0
+             ? 1
+             : 0;
+}

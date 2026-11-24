@@ -1,0 +1,37 @@
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <stddef.h>
+#include <stdint.h>
+
+static void *(*real_malloc)(size_t);
+static int armed;
+static uint64_t fault_count;
+
+void fault_arm(size_t min_size)
+{
+    (void)min_size;
+    armed = 1;
+}
+
+void fault_disarm(void)
+{
+    armed = 0;
+}
+
+uint64_t fault_get_count(void)
+{
+    return fault_count;
+}
+
+void *malloc(size_t size)
+{
+    if (!real_malloc) {
+        real_malloc = (void *(*)(size_t))dlsym(RTLD_NEXT, "malloc");
+    }
+    if (armed && size >= 4096) {
+        armed = 0;
+        fault_count++;
+        return NULL;
+    }
+    return real_malloc(size);
+}
